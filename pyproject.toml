@@ -1,0 +1,23 @@
+[project]
+name = "adforensictool"
+version = "0.1.0"
+description = "Reconstructs attacker narratives from Windows/Active Directory Security event logs (.evtx) into an analyst-ready Excel report."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "python-evtx>=0.7.4",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+    "colorama>=0.4.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+adforensictool = "main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

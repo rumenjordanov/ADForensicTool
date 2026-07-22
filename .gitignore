@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Real event log exports and generated reports are evidence/PII-bearing --
+# never commit them. The one exception is examples/sample_report.xlsx,
+# which is built entirely from synthetic data (see
+# examples/generate_sample_report.py) and is safe/intended to be checked in.
+*.evtx
+*.xlsx
+!tests/fixtures/*.xlsx
+!examples/sample_report.xlsx
+
+.vscode/
+.idea/

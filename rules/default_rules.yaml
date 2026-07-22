@@ -1,0 +1,62 @@
+# Detection rules for ADForensicTool.
+#
+# Each rule has:
+#   id                required, unique, used as a key elsewhere (correlator, excel tabs)
+#   name              human-readable name shown in reports
+#   severity          low | medium | high | critical
+#   mitre_technique   MITRE ATT&CK technique ID (informational, shown in coverage tab)
+#   type              one of: threshold, always_flag, field_match  (see rules/engine.py)
+#   event_ids         list of Windows Event IDs this rule looks at
+#
+# type: threshold  -- flags a cluster of N+ matching events for the same
+#   group_by column within window_minutes of each other.
+#   extra fields: group_by (normalized column name), window_minutes, min_count
+#
+# type: always_flag -- flags every matching event unconditionally. Used for
+#   events that are inherently suspicious regardless of frequency.
+#
+# type: field_match -- flags events where a field in the raw event_data dict
+#   equals one of the given values.
+#   extra fields: field (raw EventData "Name" attribute), equals (list of strings)
+
+rules:
+  - id: brute_force
+    name: "Brute Force Login Attempts"
+    severity: high
+    mitre_technique: T1110
+    type: threshold
+    event_ids: [4625]
+    group_by: user
+    window_minutes: 10
+    min_count: 5
+
+  - id: privilege_escalation
+    name: "Privileged Group Membership Change"
+    severity: critical
+    mitre_technique: T1098
+    type: always_flag
+    event_ids: [4728, 4732, 4756]
+
+  - id: audit_log_cleared
+    name: "Security Audit Log Cleared"
+    severity: critical
+    mitre_technique: T1070.001
+    type: always_flag
+    event_ids: [1102]
+
+  - id: kerberoasting
+    name: "Kerberoasting (RC4 Service Ticket Request)"
+    severity: high
+    mitre_technique: T1558.003
+    type: field_match
+    event_ids: [4769]
+    field: TicketEncryptionType
+    equals: ["0x17"]
+
+  # The two rules below describe multi-event-ID sequences (a logon following
+  # a brute-force cluster; a service/task created shortly after a suspicious
+  # logon). They are intentionally NOT expressible by the generic engine
+  # above, which only ever looks at one rule's own event stream in
+  # isolation. Stitching flagged events from *different* rules together
+  # into a single narrative is exactly what correlator/chain_builder.py is
+  # for -- see the TODOs there.
