@@ -1,10 +1,8 @@
 # ADForensicTool
 
-[![Tests](https://github.com/<OWNER>/<REPO>/actions/workflows/tests.yml/badge.svg)](https://github.com/<OWNER>/<REPO>/actions/workflows/tests.yml)
+[![Tests](https://github.com/rumenjordanov/ADForensicTool/actions/workflows/tests.yml/badge.svg)](https://github.com/rumenjordanov/ADForensicTool/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-
-<!-- Replace <OWNER>/<REPO> above with this repo's actual GitHub path once pushed. -->
 
 Analyzes Windows/Active Directory **Security** event logs (`.evtx` exports
 from Domain Controllers) after a suspected breach and reconstructs an
