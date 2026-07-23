@@ -25,7 +25,16 @@ rules:
     severity: high
     mitre_technique: T1110
     type: threshold
-    event_ids: [4625]
+    # 4625 (NTLM/interactive logon failure) and 4771 (Kerberos pre-auth
+    # failure) are BOTH how a failed domain logon can show up, depending on
+    # which protocol the client attempted -- a real brute-force tool can
+    # trip either or both. Watching only 4625 misses Kerberos-based
+    # attempts entirely, which was confirmed the hard way: failed logons
+    # against a hostname (Kerberos) produced zero 4625s, while the same
+    # attempts against the DC's bare IP (forcing NTLM) produced them
+    # immediately. The threshold below counts either event ID toward the
+    # same per-user cluster.
+    event_ids: [4625, 4771]
     group_by: user
     window_minutes: 10
     min_count: 5

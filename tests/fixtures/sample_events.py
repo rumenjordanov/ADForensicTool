@@ -70,6 +70,33 @@ def failed_logon_xml(timestamp: str, user: str = "jsmith", ip: str = "203.0.113.
     )
 
 
+def kerberos_preauth_failed_xml(
+    timestamp: str, user: str = "jsmith", ip: str = "203.0.113.44", computer: str = "DC01.contoso.local"
+) -> str:
+    """A 4771 (Kerberos pre-authentication failed) event.
+
+    This is the Kerberos-path equivalent of a 4625 -- a domain logon
+    attempted against a hostname (rather than a bare IP, which forces
+    NTLM) fails here instead, with a wrong password showing as
+    Status "0x18".
+    """
+    return make_event_xml(
+        4771,
+        timestamp,
+        computer=computer,
+        data={
+            "TargetUserName": user,
+            "TargetDomainName": "CONTOSO.LOCAL",
+            "ServiceName": "krbtgt/CONTOSO.LOCAL",
+            "TicketOptions": "0x40810010",
+            "Status": "0x18",
+            "PreAuthType": "2",
+            "IpAddress": ip,
+            "IpPort": "0",
+        },
+    )
+
+
 def successful_logon_xml(timestamp: str, user: str = "jsmith", ip: str = "203.0.113.44", computer: str = "DC01.contoso.local") -> str:
     """A 4624 (successful logon) event."""
     return make_event_xml(

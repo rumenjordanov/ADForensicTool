@@ -84,7 +84,10 @@ loaded by [`rules/engine.py`](rules/engine.py). Three rule *types* cover
 everything that doesn't need cross-event-ID correlation:
 
 - **threshold** — N+ matching events for the same actor within a time
-  window (e.g. brute force: 5+ `4625`s for one user in 10 minutes)
+  window (e.g. brute force: 5+ `4625`/`4771`s for one user in 10 minutes —
+  both event IDs count toward the same cluster since a domain logon failure
+  shows up as `4625` over NTLM but `4771` over Kerberos, depending on how
+  the client reached the DC; watching only one silently misses the other)
 - **always_flag** — every matching event is inherently suspicious
   (e.g. `1102` audit log cleared, `4728`/`4732`/`4756` privileged group changes)
 - **field_match** — a raw event field equals one of a set of values

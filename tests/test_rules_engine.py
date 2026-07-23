@@ -15,6 +15,7 @@ from tests.fixtures.sample_events import (
     audit_log_cleared_xml,
     failed_logon_xml,
     group_membership_change_xml,
+    kerberos_preauth_failed_xml,
     kerberoasting_xml,
     make_event_xml,
 )
@@ -49,6 +50,42 @@ def test_brute_force_does_not_fire_below_threshold(rules):
     flagged = apply_rules(df, rules)
 
     assert flagged[flagged["rule_id"] == "brute_force"].empty
+
+
+def test_brute_force_fires_on_kerberos_preauth_failures_alone(rules):
+    """Regression test: Kerberos-based brute force (domain logon attempted
+    against a hostname, not a bare IP) never generates 4625 at all -- it
+    fails at Kerberos pre-authentication and only produces 4771. Confirmed
+    against a real AD lab: hostname-targeted failed logons produced zero
+    4625s until the attempts were retargeted at the DC's bare IP to force
+    NTLM. Without 4771 in brute_force's event_ids, this whole attack path
+    would be invisible to the tool.
+    """
+    xml = [kerberos_preauth_failed_xml(f"2026-06-08T02:{10 + i}:00.000000Z", user="jsmith") for i in range(5)]
+    df = _df_from_xml(xml)
+
+    flagged = apply_rules(df, rules)
+
+    hits = flagged[flagged["rule_id"] == "brute_force"]
+    assert len(hits) == 5
+    assert (hits["severity"] == "high").all()
+
+
+def test_brute_force_fires_on_mixed_ntlm_and_kerberos_failures(rules):
+    """A real attacker's tooling can trip a mix of 4625 and 4771 depending
+    on how each attempt was routed -- the threshold should count both
+    event IDs toward the same per-user cluster rather than requiring 5+ of
+    one specific type.
+    """
+    xml = [failed_logon_xml(f"2026-06-08T02:{10 + i}:00.000000Z", user="jsmith") for i in range(3)]
+    xml += [kerberos_preauth_failed_xml(f"2026-06-08T02:{13 + i}:00.000000Z", user="jsmith") for i in range(2)]
+    df = _df_from_xml(xml)
+
+    flagged = apply_rules(df, rules)
+
+    hits = flagged[flagged["rule_id"] == "brute_force"]
+    assert len(hits) == 5
+    assert set(hits["event_id"]) == {4625, 4771}
 
 
 def test_privilege_escalation_always_flags(rules):

@@ -1,6 +1,6 @@
 [project]
 name = "adforensictool"
-version = "0.1.0"
+version = "0.1.1"
 description = "Reconstructs attacker narratives from Windows/Active Directory Security event logs (.evtx) into an analyst-ready Excel report."
 readme = "README.md"
 requires-python = ">=3.11"
