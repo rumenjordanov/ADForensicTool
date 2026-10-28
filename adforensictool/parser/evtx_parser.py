@@ -16,6 +16,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -101,6 +102,28 @@ class ParseStats:
     records_skipped: int = 0
 
 
+def _parse_timestamp(text: str | None) -> pd.Timestamp:
+    """SystemTime string -> UTC Timestamp (NaT if missing/bogus).
+
+    datetime.fromisoformat covers every form seen in practice (python-evtx's
+    "2026-06-08 02:14:00.681640+00:00", Windows' 7-digit "...00.6816400Z",
+    naive values) and is ~50x faster than pd.to_datetime, which re-guesses
+    the format on every call and dominated parse time on large logs.
+    python-evtx renders an empty FILETIME as datetime.min (year 1); that's
+    "no timestamp", not a real time, and would sort ahead of everything.
+    """
+    if not text:
+        return pd.NaT
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return pd.to_datetime(text, utc=True, errors="coerce")
+    if dt.year < 1700:
+        return pd.NaT
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    return pd.Timestamp(dt)
+
+
 def _account_from_dn(value: str) -> str:
     """'CN=Smith\\, John,CN=Users,DC=contoso,DC=local' -> 'Smith, John'."""
     match = _DN_CN_RE.match(value)
@@ -174,14 +197,21 @@ def normalize_record(xml_string: str) -> dict[str, Any]:
     if user and user.upper().startswith("CN="):
         user = _account_from_dn(user)
 
+    # Kerberos events (4768/4769/4771) log IPv4 clients as IPv4-mapped IPv6
+    # ("::ffff:10.0.0.5") while NTLM's 4625 logs "10.0.0.5"; one attacker
+    # address must look the same in both to be grouped/correlated.
+    source_ip = first_present("source_ip")
+    if source_ip and source_ip.lower().startswith("::ffff:") and "." in source_ip:
+        source_ip = source_ip[7:]
+
     return {
-        "timestamp": pd.to_datetime(timestamp, utc=True) if timestamp else pd.NaT,
+        "timestamp": _parse_timestamp(timestamp),
         "event_id": event_id,
         "user": user,
         "user_sid": first_present("user_sid"),
         "subject_user": first_present("subject_user"),
         "target_group": first_present("target_group"),
-        "source_ip": first_present("source_ip"),
+        "source_ip": source_ip,
         "target_host": target_host,
         "logon_type": first_present("logon_type"),
         "process_name": first_present("process_name"),

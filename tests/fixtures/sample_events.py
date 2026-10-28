@@ -185,3 +185,183 @@ def kerberoasting_xml(timestamp: str, user: str = "svc_sql", service: str = "MSS
             "IpAddress": "10.0.0.5",
         },
     )
+
+
+# -- Events for the extended detection set --------------------------------
+# Field names/values follow what Windows actually logs for each Event ID.
+
+DS_REPLICATION_GET_CHANGES_ALL = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"
+
+
+def asrep_tgt_xml(timestamp: str, user: str = "svc_legacy", preauth: str = "0", ip: str = "::ffff:203.0.113.44") -> str:
+    """A 4768 (TGT requested). PreAuthType 0 = no pre-authentication."""
+    return make_event_xml(
+        4768,
+        timestamp,
+        data={
+            "TargetUserName": user,
+            "TargetDomainName": "CONTOSO.LOCAL",
+            "TargetSid": "S-1-5-21-1-2-3-1600",
+            "ServiceName": "krbtgt",
+            "TicketOptions": "0x40800010",
+            "Status": "0x0",
+            "TicketEncryptionType": "0x17",
+            "PreAuthType": preauth,
+            "IpAddress": ip,
+            "IpPort": "49712",
+        },
+    )
+
+
+def directory_access_xml(timestamp: str, performed_by: str = "jsmith", guid: str = DS_REPLICATION_GET_CHANGES_ALL) -> str:
+    """A 4662 (operation performed on a directory object) exercising a control access right."""
+    return make_event_xml(
+        4662,
+        timestamp,
+        data={
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "SubjectLogonId": "0x5a3c1",
+            "ObjectServer": "DS",
+            "ObjectType": "%{19195a5b-6da0-11d0-afd3-00c04fd930c9}",
+            "ObjectName": "%{2d3c4f1a-1111-2222-3333-444455556666}",
+            "OperationType": "Object Access",
+            "AccessList": "%%7688",
+            "AccessMask": "0x100",
+            "Properties": f"%%7688\n\t\t{{{guid}}}\n\t{{19195a5b-6da0-11d0-afd3-00c04fd930c9}}",
+        },
+    )
+
+
+def account_created_xml(timestamp: str, new_account: str = "helpdesk2", performed_by: str = "jsmith") -> str:
+    """A 4720 (user account created)."""
+    return make_event_xml(
+        4720,
+        timestamp,
+        data={
+            "TargetUserName": new_account,
+            "TargetDomainName": "CONTOSO",
+            "TargetSid": "S-1-5-21-1-2-3-1700",
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "SamAccountName": new_account,
+        },
+    )
+
+
+def scheduled_task_xml(timestamp: str, performed_by: str = "jsmith", task: str = "\\Microsoft\\Windows\\Updater") -> str:
+    """A 4698 (scheduled task created)."""
+    return make_event_xml(
+        4698,
+        timestamp,
+        data={
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "TaskName": task,
+            "TaskContent": "&lt;Task&gt;...&lt;/Task&gt;",
+        },
+    )
+
+
+def service_installed_xml(timestamp: str, performed_by: str = "jsmith", service: str = "PSEXESVC") -> str:
+    """A 4697 (service installed, Security log)."""
+    return make_event_xml(
+        4697,
+        timestamp,
+        data={
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "ServiceName": service,
+            "ServiceFileName": "%SystemRoot%\\PSEXESVC.exe",
+            "ServiceType": "0x10",
+            "ServiceStartType": "3",
+            "ServiceAccount": "LocalSystem",
+        },
+    )
+
+
+def system_service_installed_xml(timestamp: str, service: str = "PSEXESVC") -> str:
+    """A 7045 (service installed, System log)."""
+    return make_event_xml(
+        7045,
+        timestamp,
+        data={
+            "ServiceName": service,
+            "ImagePath": "%SystemRoot%\\PSEXESVC.exe",
+            "ServiceType": "user mode service",
+            "StartType": "demand start",
+            "AccountName": "LocalSystem",
+        },
+    )
+
+
+def audit_policy_changed_xml(timestamp: str, changes: str = "%%8448", performed_by: str = "jsmith") -> str:
+    """A 4719 (system audit policy changed). %%8448 = Success removed, %%8449 = Success added."""
+    return make_event_xml(
+        4719,
+        timestamp,
+        data={
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "CategoryId": "%%8274",
+            "SubcategoryId": "%%12544",
+            "SubcategoryGuid": "{0cce9215-69ae-11d9-bed3-505054503030}",
+            "AuditPolicyChanges": changes,
+        },
+    )
+
+
+def dsrm_password_set_xml(timestamp: str, performed_by: str = "jsmith") -> str:
+    """A 4794 (attempt to set the Directory Services Restore Mode admin password)."""
+    return make_event_xml(
+        4794,
+        timestamp,
+        data={
+            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserName": performed_by,
+            "SubjectDomainName": "CONTOSO",
+            "Workstation": "DC01",
+            "Status": "0x0",
+        },
+    )
+
+
+def account_lockout_xml(timestamp: str, user: str = "jsmith", caller: str = "WORKSTATION1") -> str:
+    """A 4740 (user account locked out). TargetDomainName holds the caller computer."""
+    return make_event_xml(
+        4740,
+        timestamp,
+        data={
+            "TargetUserName": user,
+            "TargetDomainName": caller,
+            "TargetSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "DC01$",
+            "SubjectDomainName": "CONTOSO",
+        },
+    )
+
+
+def new_credentials_logon_xml(timestamp: str, user: str = "jsmith", process: str = "seclogo") -> str:
+    """A 4624 with LogonType 9 (NewCredentials), as runas /netonly or sekurlsa::pth produce."""
+    return make_event_xml(
+        4624,
+        timestamp,
+        data={
+            "SubjectUserName": user,
+            "TargetUserName": user,
+            "TargetDomainName": "CONTOSO",
+            "TargetUserSid": "S-1-5-21-1-2-3-1234",
+            "LogonType": "9",
+            "LogonProcessName": process,
+            "AuthenticationPackageName": "Negotiate",
+            "TargetOutboundUserName": "administrator",
+            "IpAddress": "::1",
+            "ProcessName": "C:\\Windows\\System32\\svchost.exe",
+        },
+    )

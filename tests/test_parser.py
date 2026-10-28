@@ -121,6 +121,29 @@ def test_normalize_kerberoasting_ticket_encryption_type():
     assert record["event_data"]["TicketEncryptionType"] == "0x17"
 
 
+@pytest.mark.parametrize(
+    "system_time, expected",
+    [
+        ("2026-06-08 02:14:00.681640+00:00", "2026-06-08T02:14:00.681640Z"),  # python-evtx
+        ("2026-06-08T02:14:00.6816400Z", "2026-06-08T02:14:00.681640Z"),  # Windows, 7 digits
+        ("2026-06-08T02:14:00Z", "2026-06-08T02:14:00Z"),
+        ("2026-06-08 02:14:00", "2026-06-08T02:14:00Z"),  # naive -> UTC
+        ("2026-06-08T04:14:00+02:00", "2026-06-08T02:14:00Z"),  # offset -> UTC
+        ("08/06/2026 02:14", "2026-08-06T02:14:00Z"),  # odd format: slow fallback
+    ],
+)
+def test_timestamp_formats(system_time, expected):
+    record = normalize_record(make_event_xml(4625, system_time))
+    assert record["timestamp"] == pd.Timestamp(expected)
+    assert str(record["timestamp"].tz) == "UTC"
+
+
+@pytest.mark.parametrize("system_time", ["0001-01-01 00:00:00", "garbage"])
+def test_bogus_timestamps_become_nat(system_time):
+    """python-evtx renders an empty FILETIME as datetime.min (year 1)."""
+    assert pd.isna(normalize_record(make_event_xml(4625, system_time))["timestamp"])
+
+
 def test_normalize_record_raises_on_malformed_xml():
     with pytest.raises(ET.ParseError):
         normalize_record("<Event><System>")
