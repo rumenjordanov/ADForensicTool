@@ -74,9 +74,29 @@ DASHBOARD_LAST_COL = 12  # column L -- width of the banner/KPI/bullet area
 # --------------------------------------------------------------------------
 
 
+def _set_value(cell, value: Any) -> None:
+    """Assign value to cell, never letting log-derived text become a formula.
+
+    Usernames, hostnames, service names etc. are attacker-controlled: anyone
+    can trigger a failed logon for an account literally named
+    '=HYPERLINK("http://evil/",...)'. openpyxl stores any string starting
+    with "=" as a live formula, so force such values back to plain text.
+    The analyst still sees the exact original string.
+    """
+    cell.value = value
+    if isinstance(value, str) and value.startswith("="):
+        cell.data_type = "s"
+
+
+def _write_cell(ws: Worksheet, row: int, column: int, value: Any):
+    cell = ws.cell(row=row, column=column)
+    _set_value(cell, value)
+    return cell
+
+
 def _write_header(ws: Worksheet, columns: list[str], row: int = 1) -> None:
     for col_idx, col_name in enumerate(columns, start=1):
-        cell = ws.cell(row=row, column=col_idx, value=col_name)
+        cell = _write_cell(ws, row, col_idx, col_name)
         cell.fill = theme.TABLE_HEADER_FILL
         cell.font = theme.TABLE_HEADER_FONT
         cell.alignment = theme.TABLE_HEADER_ALIGN
@@ -102,7 +122,7 @@ def _write_table(ws: Worksheet, df: pd.DataFrame, columns: list[str], color_by_s
         for col_idx, value in enumerate(row, start=1):
             if hasattr(value, "isoformat"):
                 value = value.isoformat(sep=" ", timespec="seconds")
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _write_cell(ws, row_idx, col_idx, value)
             cell.border = theme.THIN_BORDER
 
         severity = str(row[severity_idx]).lower() if severity_idx is not None else None
@@ -158,7 +178,7 @@ def _build_banner(ws: Worksheet, source_file: str | None, generated_at: datetime
 
     ws.merge_cells(f"G2:{last_col_letter}2")
     src_cell = ws["G2"]
-    src_cell.value = f"Source: {source_file or 'unknown'}"
+    _set_value(src_cell, f"Source: {source_file or 'unknown'}")
     src_cell.font = theme.BANNER_SUBTITLE_FONT
     src_cell.alignment = Alignment(horizontal="right", vertical="center")
 
@@ -245,8 +265,8 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
     ws["N1"] = "Severity"
     ws["O1"] = "Count"
     for i, (_, sev_label, count) in enumerate(sev_rows, start=2):
-        ws.cell(row=i, column=14, value=sev_label)
-        ws.cell(row=i, column=15, value=count)
+        _write_cell(ws, i, 14, sev_label)
+        _write_cell(ws, i, 15, count)
 
     severity_chart = BarChart()
     severity_chart.type = "col"
@@ -278,8 +298,8 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
     ws["Q1"] = "Rule"
     ws["R1"] = "Count"
     for i, row in enumerate(by_rule.itertuples(index=False), start=2):
-        ws.cell(row=i, column=17, value=row.rule_name)
-        ws.cell(row=i, column=18, value=int(row.count))
+        _write_cell(ws, i, 17, row.rule_name)
+        _write_cell(ws, i, 18, int(row.count))
 
     rule_chart = BarChart()
     rule_chart.type = "bar"  # horizontal bars read better with long rule names
@@ -309,7 +329,7 @@ def _build_section_header(ws: Worksheet, row: int, text: str) -> None:
     last_col_letter = get_column_letter(DASHBOARD_LAST_COL)
     ws.merge_cells(f"A{row}:{last_col_letter}{row}")
     cell = ws[f"A{row}"]
-    cell.value = text
+    _set_value(cell, text)
     cell.font = theme.SECTION_HEADER_FONT
     for c in ws[f"A{row}:{last_col_letter}{row}"][0]:
         c.border = theme.SECTION_HEADER_BORDER
@@ -319,7 +339,7 @@ def _write_wide_row(ws: Worksheet, row: int, text: str, font: Font | None = None
     last_col_letter = get_column_letter(DASHBOARD_LAST_COL)
     ws.merge_cells(f"A{row}:{last_col_letter}{row}")
     cell = ws[f"A{row}"]
-    cell.value = text
+    _set_value(cell, text)
     cell.alignment = Alignment(wrap_text=True, vertical="center")
     if font:
         cell.font = font
@@ -403,7 +423,7 @@ def _build_attack_chains(ws: Worksheet, flagged: pd.DataFrame) -> None:
         for col_idx, value in enumerate(row, start=1):
             if hasattr(value, "isoformat"):
                 value = value.isoformat(sep=" ", timespec="seconds")
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _write_cell(ws, row_idx, col_idx, value)
             cell.border = theme.THIN_BORDER
         severity = str(row[columns.index("severity")]).lower()
         row_fill = theme.SEVERITY_ROW_FILLS.get(severity)
@@ -443,7 +463,7 @@ def _build_mitre_coverage(ws: Worksheet, flagged: pd.DataFrame, rules: list[Rule
 
     for row_idx, row in enumerate(rows, start=2):
         for col_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _write_cell(ws, row_idx, col_idx, value)
             cell.border = theme.THIN_BORDER
             if row_idx % 2 == 0:
                 cell.fill = theme.ZEBRA_FILL
