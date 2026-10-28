@@ -7,7 +7,20 @@ rules.engine) without needing a real .evtx binary fixture.
 """
 from __future__ import annotations
 
+import zlib
+
 _NS = "http://schemas.microsoft.com/win/2004/08/events/event"
+
+
+def sid_for(account: str) -> str:
+    """A stable, distinct domain SID per account name (as real accounts have).
+
+    Fixtures used to hardcode one SID for everyone, which made unrelated
+    accounts look like the same principal to anything joining on SIDs.
+    """
+    if account.lower() == "administrator":
+        return "S-1-5-21-1-2-3-500"
+    return f"S-1-5-21-1-2-3-{1000 + zlib.crc32(account.lower().encode()) % 90000}"
 
 
 def make_event_xml(
@@ -145,7 +158,7 @@ def group_membership_change_xml(
         computer=computer,
         data={
             "MemberName": f"CN={member},CN=Users,DC=contoso,DC=local",
-            "MemberSid": "S-1-5-21-1-2-3-1234",
+            "MemberSid": sid_for(member),
             "TargetUserName": group,
             "SubjectUserName": performed_by,
         },
@@ -162,7 +175,7 @@ def audit_log_cleared_xml(timestamp: str, performed_by: str = "administrator", c
             "LogFileCleared",
             "http://manifests.microsoft.com/win/2004/08/windows/eventlog",
             {
-                "SubjectUserSid": "S-1-5-21-1-2-3-500",
+                "SubjectUserSid": sid_for(performed_by),
                 "SubjectUserName": performed_by,
                 "SubjectDomainName": "CONTOSO",
                 "SubjectLogonId": "0x3e7",
@@ -201,7 +214,7 @@ def asrep_tgt_xml(timestamp: str, user: str = "svc_legacy", preauth: str = "0", 
         data={
             "TargetUserName": user,
             "TargetDomainName": "CONTOSO.LOCAL",
-            "TargetSid": "S-1-5-21-1-2-3-1600",
+            "TargetSid": sid_for(user),
             "ServiceName": "krbtgt",
             "TicketOptions": "0x40800010",
             "Status": "0x0",
@@ -219,7 +232,7 @@ def directory_access_xml(timestamp: str, performed_by: str = "jsmith", guid: str
         4662,
         timestamp,
         data={
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "SubjectLogonId": "0x5a3c1",
@@ -242,8 +255,8 @@ def account_created_xml(timestamp: str, new_account: str = "helpdesk2", performe
         data={
             "TargetUserName": new_account,
             "TargetDomainName": "CONTOSO",
-            "TargetSid": "S-1-5-21-1-2-3-1700",
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "TargetSid": sid_for(new_account),
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "SamAccountName": new_account,
@@ -257,7 +270,7 @@ def scheduled_task_xml(timestamp: str, performed_by: str = "jsmith", task: str =
         4698,
         timestamp,
         data={
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "TaskName": task,
@@ -272,7 +285,7 @@ def service_installed_xml(timestamp: str, performed_by: str = "jsmith", service:
         4697,
         timestamp,
         data={
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "ServiceName": service,
@@ -305,7 +318,7 @@ def audit_policy_changed_xml(timestamp: str, changes: str = "%%8448", performed_
         4719,
         timestamp,
         data={
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "CategoryId": "%%8274",
@@ -322,7 +335,7 @@ def dsrm_password_set_xml(timestamp: str, performed_by: str = "jsmith") -> str:
         4794,
         timestamp,
         data={
-            "SubjectUserSid": "S-1-5-21-1-2-3-1234",
+            "SubjectUserSid": sid_for(performed_by),
             "SubjectUserName": performed_by,
             "SubjectDomainName": "CONTOSO",
             "Workstation": "DC01",
@@ -339,7 +352,7 @@ def account_lockout_xml(timestamp: str, user: str = "jsmith", caller: str = "WOR
         data={
             "TargetUserName": user,
             "TargetDomainName": caller,
-            "TargetSid": "S-1-5-21-1-2-3-1234",
+            "TargetSid": sid_for(user),
             "SubjectUserSid": "S-1-5-18",
             "SubjectUserName": "DC01$",
             "SubjectDomainName": "CONTOSO",
@@ -356,7 +369,7 @@ def new_credentials_logon_xml(timestamp: str, user: str = "jsmith", process: str
             "SubjectUserName": user,
             "TargetUserName": user,
             "TargetDomainName": "CONTOSO",
-            "TargetUserSid": "S-1-5-21-1-2-3-1234",
+            "TargetUserSid": sid_for(user),
             "LogonType": "9",
             "LogonProcessName": process,
             "AuthenticationPackageName": "Negotiate",
