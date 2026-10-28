@@ -105,10 +105,22 @@ STEP 10 Narrator   (done)
       Caught while testing: multi-day prefix rendered as
       "2026-06-08 06-08 23:50-06-09 00:20" -> now "... 23:50 to 2026-06-09 00:20".
 
-STEP 11 Report integration
-  [ ] Attack Chains tab renders real chains (+ per-rule detection groups
-      kept as a second section), narratives on Executive Summary, parse
-      stats, suppressed count, multiple source files.
+STEP 11 Report integration   (done)
+  [x] Attack Chains tab: chain table + stage breakdown; per-rule grouping
+      moved to its own "Detections by Rule" tab. Executive Summary: ATTACK
+      NARRATIVE section, ATTACK CHAINS KPI tile. chain_id column on Raw
+      Flagged Events. Times written as real Excel datetimes in the display
+      timezone (tz param), zone named in headers. CLI prints chains,
+      --chain-window option.
+  [x] Visually verified by exporting through Excel to PDF -> PNG. Found and
+      fixed: (a) all 3 charts rendered without axis labels/categories
+      (openpyxl 3.1 omits <delete val="0"/>; pre-existing bug), (b) chain row
+      cells bottom-aligned next to the wrapped narrative, (c) row-height
+      estimate too conservative, (d) same account listed twice in chain
+      headline ("jsmith and jsmith@CONTOSO.LOCAL"), (e) "→" crashing /
+      garbling on cp1251 consoles -> console uses errors="replace" and "->".
+      Regression tests for (a) and (d), verified to fail without the fix.
+  [ ] (moved to step 12) banner source path overflows when long.
 
 STEP 12 Input: multiple files / folders, faster parsing
   [ ] `--input` accepts several files and/or directories (recursive *.evtx).

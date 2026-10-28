@@ -1,25 +1,26 @@
 """
 Builds the analyst-facing .xlsx report from flagged events.
 
-Tabs (per the project spec):
-  - Executive Summary       branded dashboard: risk score, KPI tiles, charts, key findings
-  - Attack Chains           one row per chain, color-coded by severity
+Tabs:
+  - Executive Summary       branded dashboard: risk score, KPI tiles, charts,
+                            attack narrative (one sentence per chain), key findings
+  - Attack Chains           one row per correlated chain + a stage-by-stage breakdown
+  - Detections by Rule      flagged events grouped per rule / threshold cluster
   - Raw Flagged Events      full detail table, color-coded by severity, filterable
   - Account/Group Changes   dedicated view of privilege-escalation events
   - MITRE ATT&CK Coverage   technique -> observed count heatmap + chart
 
-"Attack Chains" currently groups flagged events by rule_id as a stand-in for
-real multi-stage chains, since correlator/chain_builder.py (which produces
-actual cross-rule chains) is still a stub. Once that module is implemented,
-this tab should be fed real Chain objects instead -- see the TODO on
-build_report's `chains` parameter.
+Timestamps are written as real Excel datetimes (sortable, filterable) in the
+display timezone, which is named in every timestamp column header and on
+the Executive Summary -- Excel itself has no notion of timezones.
 
 Visual design (colors, fonts, KPI tile styling) lives in excel_export/theme.py
-so every tab shares one look rather than five independently-styled sheets.
+so every tab shares one look rather than independently-styled sheets.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import math
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import pandas as pd
@@ -34,7 +35,9 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adforensictool.correlator.chain_builder import Chain, build_chains
 from adforensictool.excel_export import theme
+from adforensictool.narrator.narrate import chain_headline, narrate_chain
 from adforensictool.parser.evtx_parser import ParseStats
 from adforensictool.rules.engine import Rule
 
@@ -65,6 +68,7 @@ DISPLAY_COLUMNS = [
     "rule_name",
     "severity",
     "mitre_technique",
+    "chain_id",
     "user",
     "user_sid",
     "subject_user",
@@ -76,12 +80,39 @@ DISPLAY_COLUMNS = [
     "raw_message",
     "cluster_id",
 ]
+OPTIONAL_DISPLAY_COLUMNS = ["source_file"]  # shown only when present (multi-file input)
 
 DASHBOARD_LAST_COL = 12  # column L -- width of the banner/KPI/bullet area
+MAX_NARRATED_CHAINS = 10  # on the Executive Summary; the rest are on the Attack Chains tab
+DATETIME_FORMAT = "yyyy-mm-dd hh:mm:ss"
+
+
+def zone_label(tz: tzinfo | None) -> str:
+    if tz is None:
+        return "UTC"
+    return getattr(tz, "key", None) or str(tz)
+
+
+def _local_naive(value: Any, tz: tzinfo | None) -> Any:
+    """tz-aware timestamp -> naive datetime in the display zone (what Excel
+    can store); other values pass through. NaT -> empty."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    if isinstance(value, pd.Timestamp | datetime):
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert(tz or UTC).tz_localize(None)
+        return ts.to_pydatetime()
+    return value
+
+
+def _fmt_time(value: Any, tz: tzinfo | None) -> str:
+    local = _local_naive(value, tz)
+    return local.strftime("%Y-%m-%d %H:%M:%S") if isinstance(local, datetime) else "?"
 
 
 # --------------------------------------------------------------------------
-# Generic table helpers, shared by the four data tabs
+# Generic table helpers, shared by the data tabs
 # --------------------------------------------------------------------------
 
 
@@ -97,6 +128,8 @@ def _set_value(cell, value: Any) -> None:
     cell.value = value
     if isinstance(value, str) and value.startswith("="):
         cell.data_type = "s"
+    elif isinstance(value, datetime):
+        cell.number_format = DATETIME_FORMAT
 
 
 def _write_cell(ws: Worksheet, row: int, column: int, value: Any):
@@ -105,9 +138,15 @@ def _write_cell(ws: Worksheet, row: int, column: int, value: Any):
     return cell
 
 
-def _write_header(ws: Worksheet, columns: list[str], row: int = 1) -> None:
+def _header_label(column: str, tz: tzinfo | None) -> str:
+    if column in {"timestamp", "start", "end", "first_seen", "last_seen"}:
+        return f"{column} ({zone_label(tz)})"
+    return column
+
+
+def _write_header(ws: Worksheet, columns: list[str], row: int = 1, tz: tzinfo | None = None) -> None:
     for col_idx, col_name in enumerate(columns, start=1):
-        cell = _write_cell(ws, row, col_idx, col_name)
+        cell = _write_cell(ws, row, col_idx, _header_label(col_name, tz))
         cell.fill = theme.TABLE_HEADER_FILL
         cell.font = theme.TABLE_HEADER_FONT
         cell.alignment = theme.TABLE_HEADER_ALIGN
@@ -115,31 +154,35 @@ def _write_header(ws: Worksheet, columns: list[str], row: int = 1) -> None:
     ws.row_dimensions[row].height = 20
 
 
-def _autosize_columns(ws: Worksheet, columns: list[str], rows: list[list[Any]]) -> None:
+def _autosize_columns(ws: Worksheet, columns: list[str], rows: list[list[Any]], tz: tzinfo | None = None) -> None:
     for col_idx, col_name in enumerate(columns, start=1):
-        max_len = len(str(col_name))
+        max_len = len(_header_label(col_name, tz))
         for row in rows:
             val = row[col_idx - 1] if col_idx - 1 < len(row) else ""
-            max_len = max(max_len, len(str(val)))
+            max_len = max(max_len, 19 if isinstance(val, datetime) else len(str(val)))
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 60)
 
 
-def _write_table(ws: Worksheet, df: pd.DataFrame, columns: list[str], color_by_severity: bool = True) -> None:
-    _write_header(ws, columns)
-    rows = df[columns].astype(object).where(pd.notnull(df[columns]), "").values.tolist()
+def _write_rows(
+    ws: Worksheet,
+    columns: list[str],
+    rows: list[list[Any]],
+    start_row: int = 2,
+    tz: tzinfo | None = None,
+    zebra: bool = True,
+) -> None:
+    """Write data rows under a header, colored by their `severity` column."""
     severity_idx = columns.index("severity") if "severity" in columns else None
-
-    for row_idx, row in enumerate(rows, start=2):
+    for offset, row in enumerate(rows):
+        row_idx = start_row + offset
         for col_idx, value in enumerate(row, start=1):
-            if hasattr(value, "isoformat"):
-                value = value.isoformat(sep=" ", timespec="seconds")
-            cell = _write_cell(ws, row_idx, col_idx, value)
+            cell = _write_cell(ws, row_idx, col_idx, _local_naive(value, tz))
             cell.border = theme.THIN_BORDER
 
         severity = str(row[severity_idx]).lower() if severity_idx is not None else None
         row_fill = theme.SEVERITY_ROW_FILLS.get(severity) if severity else None
         text_color = theme.SEVERITY_TEXT_COLORS.get(severity) if severity else None
-        if row_fill is None and color_by_severity:
+        if row_fill is None and zebra:
             # No severity color applies (or this table doesn't carry one) --
             # fall back to plain zebra striping so the table still reads
             # cleanly at a glance instead of a flat wall of white rows.
@@ -152,10 +195,14 @@ def _write_table(ws: Worksheet, df: pd.DataFrame, columns: list[str], color_by_s
             if severity_idx == col_idx - 1 and text_color:
                 cell.font = Font(color=text_color, bold=True)
 
-    _autosize_columns(ws, columns, rows)
+
+def _write_table(ws: Worksheet, df: pd.DataFrame, columns: list[str], tz: tzinfo | None = None) -> None:
+    _write_header(ws, columns, tz=tz)
+    rows = df[columns].astype(object).where(pd.notnull(df[columns]), "").values.tolist() if not df.empty else []
+    _write_rows(ws, columns, rows, tz=tz)
+    _autosize_columns(ws, columns, rows, tz)
     if rows:
-        last_col_letter = get_column_letter(len(columns))
-        ws.auto_filter.ref = f"A1:{last_col_letter}{len(rows) + 1}"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
     ws.freeze_panes = "A2"
 
 
@@ -183,7 +230,7 @@ def _build_banner(ws: Worksheet, source_file: str | None, generated_at: datetime
 
     ws.merge_cells(f"G1:{last_col_letter}1")
     gen_cell = ws["G1"]
-    gen_cell.value = f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M UTC')}"
+    gen_cell.value = f"Generated: {generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M UTC')}"
     gen_cell.font = theme.BANNER_SUBTITLE_FONT
     gen_cell.alignment = Alignment(horizontal="right", vertical="center")
 
@@ -236,13 +283,24 @@ def _write_kpi_tile(ws: Worksheet, start_col: int, label: str, value: str, value
             cell.border = theme.KPI_BORDER
 
 
-def _build_kpi_row(ws: Worksheet, df: pd.DataFrame, flagged: pd.DataFrame, risk_score: int, severity_counts: dict) -> None:
+def _build_kpi_row(
+    ws: Worksheet, df: pd.DataFrame, flagged: pd.DataFrame, chains: list[Chain], risk_score: int, severity_counts: dict
+) -> None:
     risk_label, risk_color = theme.risk_band(risk_score)
     _write_kpi_tile(ws, 2, f"OVERALL RISK ({risk_label})", f"{risk_score}/100", risk_color)
     _write_kpi_tile(ws, 4, "EVENTS PARSED", str(len(df)), theme.BRAND_DARK)
     _write_kpi_tile(ws, 6, "EVENTS FLAGGED", str(len(flagged)), theme.BRAND_DARK)
-    _write_kpi_tile(ws, 8, "CRITICAL FINDINGS", str(severity_counts.get("critical", 0)), theme.SEVERITY_TEXT_COLORS["critical"])
-    _write_kpi_tile(ws, 10, "HIGH FINDINGS", str(severity_counts.get("high", 0)), theme.SEVERITY_TEXT_COLORS["high"])
+    chain_color = theme.SEVERITY_TEXT_COLORS["critical"] if chains else theme.BRAND_DARK
+    _write_kpi_tile(ws, 8, "ATTACK CHAINS", str(len(chains)), chain_color)
+    _write_kpi_tile(ws, 10, "CRITICAL FINDINGS", str(severity_counts.get("critical", 0)), theme.SEVERITY_TEXT_COLORS["critical"])
+
+
+def _show_axes(chart: BarChart) -> None:
+    """openpyxl 3.1 writes chart axes as deleted unless told otherwise, so
+    Excel draws bars with no category labels or scale -- a bar chart of
+    rule names without the rule names."""
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
 
 
 def _colored_data_points(hex_colors: list[str]) -> list[DataPoint]:
@@ -297,6 +355,7 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
     # default to plotting only visible cells, so without this the chart
     # renders as a blank box once its data columns are hidden.
     severity_chart.visible_cells_only = False
+    _show_axes(severity_chart)
     ws.add_chart(severity_chart, "B11")
 
     # -- Findings-by-rule staging table (columns Q:R), hidden from view --
@@ -325,9 +384,10 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
     rule_chart.legend = None
     rule_chart.varyColors = True
     rule_chart.series[0].data_points = _colored_data_points(
-        [theme.SEVERITY_HEX[str(sev).lower()] for sev in by_rule["severity"]]
+        [theme.SEVERITY_HEX.get(str(sev).lower(), theme.SLATE) for sev in by_rule["severity"]]
     )
     rule_chart.visible_cells_only = False  # same hidden-source-columns issue as above
+    _show_axes(rule_chart)
     ws.add_chart(rule_chart, "H11")
 
     for col in ("N", "O", "Q", "R"):
@@ -347,6 +407,8 @@ def _build_section_header(ws: Worksheet, row: int, text: str) -> None:
 
 
 def _write_wide_row(ws: Worksheet, row: int, text: str, font: Font | None = None) -> None:
+    """A full-width merged text row. Merged cells never auto-fit their
+    height in Excel, so estimate the wrapped line count from the text."""
     last_col_letter = get_column_letter(DASHBOARD_LAST_COL)
     ws.merge_cells(f"A{row}:{last_col_letter}{row}")
     cell = ws[f"A{row}"]
@@ -354,17 +416,40 @@ def _write_wide_row(ws: Worksheet, row: int, text: str, font: Font | None = None
     cell.alignment = Alignment(wrap_text=True, vertical="center")
     if font:
         cell.font = font
-    ws.row_dimensions[row].height = 18
+    lines = max(1, math.ceil(len(text) / 130))  # ~130 chars fit across the 12 dashboard columns
+    ws.row_dimensions[row].height = 18 if lines == 1 else 15 * lines + 4
+
+
+def _build_narrative(ws: Worksheet, r: int, chains: list[Chain], tz: tzinfo | None) -> int:
+    _build_section_header(ws, r, "ATTACK NARRATIVE")
+    r += 2
+    for chain in chains[:MAX_NARRATED_CHAINS]:
+        color = theme.SEVERITY_TEXT_COLORS.get(chain.severity, theme.BRAND_DARK)
+        _write_wide_row(ws, r, f"  ■  [{chain.severity.upper()}] {chain.id}: {chain_headline(chain)}", Font(color=color, bold=True))
+        r += 1
+        _write_wide_row(ws, r, f"      {narrate_chain(chain, tz)}")
+        r += 2
+    if len(chains) > MAX_NARRATED_CHAINS:
+        _write_wide_row(
+            ws,
+            r,
+            f"  + {len(chains) - MAX_NARRATED_CHAINS} more chain(s) on the Attack Chains tab.",
+            Font(italic=True, color=theme.SLATE),
+        )
+        r += 2
+    return r
 
 
 def _build_executive_summary(
     ws: Worksheet,
     df: pd.DataFrame,
     flagged: pd.DataFrame,
+    chains: list[Chain],
     source_file: str | None,
     generated_at: datetime,
     parse_stats: ParseStats | None = None,
     suppressed: dict[str, int] | None = None,
+    tz: tzinfo | None = None,
 ) -> None:
     for col in range(1, DASHBOARD_LAST_COL + 1):
         ws.column_dimensions[get_column_letter(col)].width = 11
@@ -373,8 +458,11 @@ def _build_executive_summary(
     risk_score = min(100, sum(SEVERITY_SCORE.get(sev, 0) * count for sev, count in severity_counts.items()))
 
     _build_banner(ws, source_file, generated_at)
-    _build_kpi_row(ws, df, flagged, risk_score, severity_counts)
+    _build_kpi_row(ws, df, flagged, chains, risk_score, severity_counts)
     r = _build_charts(ws, flagged)
+
+    if chains:
+        r = _build_narrative(ws, r, chains, tz)
 
     _build_section_header(ws, r, "KEY FINDINGS")
     r += 2
@@ -390,15 +478,10 @@ def _build_executive_summary(
         ).reset_index()
         by_rule.sort_values("first_seen", inplace=True)
         for _, row in by_rule.iterrows():
-            first_seen = row["first_seen"]
-            last_seen = row["last_seen"]
-            first_str = first_seen.isoformat(sep=" ", timespec="seconds") if pd.notnull(first_seen) else "?"
-            last_str = last_seen.isoformat(sep=" ", timespec="seconds") if pd.notnull(last_seen) else "?"
             severity = str(row["severity"]).lower()
-            bullet = (
-                f"  ●  [{row['severity'].upper()}] {row['rule_name']}: "
-                f"{row['count']} event(s) between {first_str} and {last_str}"
-            )
+            first, last = _fmt_time(row["first_seen"], tz), _fmt_time(row["last_seen"], tz)
+            when = f"at {first}" if first == last else f"between {first} and {last}"
+            bullet = f"  ●  [{row['severity'].upper()}] {row['rule_name']}: {row['count']} event(s) {when}"
             font = Font(color=theme.SEVERITY_TEXT_COLORS.get(severity, theme.BRAND_DARK), bold=True)
             _write_wide_row(ws, r, bullet, font)
             r += 1
@@ -430,29 +513,85 @@ def _build_executive_summary(
         r += 1
 
     r += 1
-    _write_wide_row(
-        ws,
-        r,
-        (
-            "Note: full attack-chain narratives (plain-English, timestamp-anchored) require the "
-            "correlator/narrator modules, currently stubbed. See the Attack Chains tab for a "
-            "per-rule grouping in the meantime."
-        ),
-        Font(italic=True, color=theme.SLATE),
-    )
+    _write_wide_row(ws, r, f"All event times in this report are shown in {zone_label(tz)}.", Font(italic=True, color=theme.SLATE))
 
 
 # --------------------------------------------------------------------------
-# Attack Chains / Account-Group Changes / MITRE Coverage tabs
+# Attack Chains / Detections / Account-Group Changes / MITRE Coverage tabs
 # --------------------------------------------------------------------------
 
+CHAIN_COLUMNS = ["chain_id", "severity", "start", "end", "accounts", "source_ips", "tactics", "stages", "event_count", "narrative"]
+STAGE_COLUMNS = ["chain_id", "stage", "start", "end", "rule_name", "severity", "tactic", "mitre_technique", "event_count", "users", "source_ips"]
 
-def _build_attack_chains(ws: Worksheet, flagged: pd.DataFrame) -> None:
+
+def _build_attack_chains(ws: Worksheet, chains: list[Chain], tz: tzinfo | None) -> None:
+    _write_header(ws, CHAIN_COLUMNS, tz=tz)
+    if not chains:
+        _write_cell(ws, 2, 1, "No multi-stage attack chains were identified: no two different detections shared an account within the correlation window.")
+        _autosize_columns(ws, CHAIN_COLUMNS, [], tz)
+        ws.column_dimensions["A"].width = 30
+        return
+
+    chain_rows = [
+        [
+            c.id,
+            c.severity,
+            c.start_time,
+            c.end_time,
+            ", ".join(c.users),
+            ", ".join(c.source_ips),
+            " → ".join(c.tactics),
+            " → ".join(dict.fromkeys(s.rule_name for s in c.stages)),
+            c.event_count,
+            narrate_chain(c, tz),
+        ]
+        for c in chains
+    ]
+    _write_rows(ws, CHAIN_COLUMNS, chain_rows, tz=tz)
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(CHAIN_COLUMNS))}{len(chain_rows) + 1}"
+
+    # Stage-by-stage breakdown below the chain table.
+    r = len(chain_rows) + 3
+    _write_cell(ws, r, 1, "Chain stages").font = theme.SECTION_HEADER_FONT
+    r += 1
+    _write_header(ws, STAGE_COLUMNS, row=r, tz=tz)
+    stage_rows = [
+        [c.id, n, s.start_time, s.end_time, s.rule_name, s.severity, s.tactic, s.mitre_technique, s.event_count, ", ".join(s.users), ", ".join(s.source_ips)]
+        for c in chains
+        for n, s in enumerate(c.stages, start=1)
+    ]
+    _write_rows(ws, STAGE_COLUMNS, stage_rows, start_row=r + 1, tz=tz)
+
+    # Column widths: fit both tables; the narrative column wraps instead.
+    widths: dict[int, int] = {}
+    for columns, rows in ((CHAIN_COLUMNS, chain_rows), (STAGE_COLUMNS, stage_rows)):
+        for i, name in enumerate(columns, start=1):
+            longest = max([len(_header_label(name, tz))] + [19 if isinstance(row[i - 1], pd.Timestamp) else len(str(row[i - 1])) for row in rows])
+            widths[i] = max(widths.get(i, 0), min(longest + 2, 50))
+    for i, width in widths.items():
+        ws.column_dimensions[get_column_letter(i)].width = width
+    # Long free-text columns wrap at a fixed width; every cell in a chain row
+    # is top-aligned so short values sit level with the start of the text.
+    # (accounts shares its column with the stage table's rule_name below)
+    wrap_widths = {"accounts": 45, "tactics": 40, "stages": 50, "narrative": 100}
+    for name, width in wrap_widths.items():
+        ws.column_dimensions[get_column_letter(CHAIN_COLUMNS.index(name) + 1)].width = width
+    for row_idx, row in enumerate(chain_rows, start=2):
+        lines = 1
+        for col_idx, name in enumerate(CHAIN_COLUMNS, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.alignment = Alignment(wrap_text=name in wrap_widths, vertical="top")
+            if name in wrap_widths:
+                lines = max(lines, math.ceil(len(str(row[col_idx - 1])) / (wrap_widths[name] * 0.95)))
+        ws.row_dimensions[row_idx].height = 15 * lines + 4
+    ws.freeze_panes = "B2"
+
+
+def _build_detection_groups(ws: Worksheet, flagged: pd.DataFrame, tz: tzinfo | None) -> None:
     columns = ["rule_id", "rule_name", "severity", "mitre_technique", "cluster_id", "event_count", "first_seen", "last_seen"]
-    _write_header(ws, columns)
-
     if flagged.empty:
-        _autosize_columns(ws, columns, [])
+        _write_header(ws, columns, tz=tz)
+        _autosize_columns(ws, columns, [], tz)
         return
 
     group_cols = ["rule_id", "rule_name", "severity", "mitre_technique", "cluster_id"]
@@ -462,37 +601,13 @@ def _build_attack_chains(ws: Worksheet, flagged: pd.DataFrame) -> None:
         last_seen=("timestamp", "max"),
     ).reset_index()
     grouped.sort_values("first_seen", inplace=True)
-
-    rows = grouped[columns].astype(object).values.tolist()
-    for row_idx, row in enumerate(rows, start=2):
-        for col_idx, value in enumerate(row, start=1):
-            if hasattr(value, "isoformat"):
-                value = value.isoformat(sep=" ", timespec="seconds")
-            cell = _write_cell(ws, row_idx, col_idx, value)
-            cell.border = theme.THIN_BORDER
-        severity = str(row[columns.index("severity")]).lower()
-        row_fill = theme.SEVERITY_ROW_FILLS.get(severity)
-        text_color = theme.SEVERITY_TEXT_COLORS.get(severity)
-        for col_idx in range(1, len(columns) + 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            if row_fill:
-                cell.fill = row_fill
-            if col_idx - 1 == columns.index("severity") and text_color:
-                cell.font = Font(color=text_color, bold=True)
-
-    _autosize_columns(ws, columns, rows)
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
-    ws.freeze_panes = "A2"
+    _write_table(ws, grouped, columns, tz)
 
 
-def _build_account_changes(ws: Worksheet, flagged: pd.DataFrame) -> None:
+def _build_account_changes(ws: Worksheet, flagged: pd.DataFrame, tz: tzinfo | None) -> None:
     columns = ["timestamp", "target_host", "event_id", "user", "target_group", "subject_user", "severity", "raw_message"]
     changes = flagged[flagged["rule_id"] == "privilege_escalation"] if not flagged.empty else flagged
-    if changes.empty:
-        _write_header(ws, columns)
-        _autosize_columns(ws, columns, [])
-    else:
-        _write_table(ws, changes, columns)
+    _write_table(ws, changes, columns, tz)
 
 
 def _build_mitre_coverage(ws: Worksheet, flagged: pd.DataFrame, rules: list[Rule]) -> None:
@@ -534,9 +649,16 @@ def _build_mitre_coverage(ws: Worksheet, flagged: pd.DataFrame, rules: list[Rule
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
         chart.legend = None
+        _show_axes(chart)
         ws.add_chart(chart, f"{get_column_letter(chart_col_start)}1")
 
     ws.freeze_panes = "A2"
+
+
+def chain_ids_by_row(flagged: pd.DataFrame, chains: list[Chain]) -> pd.Series:
+    """flagged-row index -> chain id ("" when the row is in no chain)."""
+    mapping = {idx: chain.id for chain in chains for stage in chain.stages for idx in stage._index}
+    return pd.Series([mapping.get(idx, "") for idx in flagged.index], index=flagged.index, dtype=object)
 
 
 def build_report(
@@ -548,16 +670,17 @@ def build_report(
     generated_at: datetime | None = None,
     parse_stats: ParseStats | None = None,
     suppressed: dict[str, int] | None = None,
+    chains: list[Chain] | None = None,
+    tz: tzinfo | None = None,
 ) -> None:
     """Build the .xlsx report and write it to output_path.
 
-    df:            full normalized event DataFrame (not currently rendered
-                   on its own tab, kept for future tabs / chain construction).
+    df:            full normalized event DataFrame (event counts, provenance).
     flagged:       output of rules.engine.apply_rules -- one row per flagged event.
     rules:         the loaded rule definitions, used to enumerate MITRE
                    techniques this run *watched for* (not just ones that fired).
-    source_file:   input .evtx path, shown in the Executive Summary banner
-                   for provenance. Optional -- falls back to "unknown".
+    source_file:   input path(s) description, shown in the Executive Summary
+                   banner for provenance. Optional -- falls back to "unknown".
     generated_at:  report generation timestamp shown in the banner. Defaults
                    to now (UTC) if not supplied.
     parse_stats:   record read/skip counters from parse_evtx; a non-zero skip
@@ -565,32 +688,27 @@ def build_report(
     suppressed:    {allowlist entry description: events it suppressed}, from
                    rules.allowlist.apply_allowlist; summarized on the
                    Executive Summary so hidden findings are never silent.
-
-    TODO: once correlator/chain_builder.py exists, pass its Chain objects in
-    here (a `chains` parameter) and have _build_attack_chains render those
-    instead of the per-rule grouping it falls back to today.
+    chains:        correlator output for `flagged`; built here with the
+                   default window when not supplied.
+    tz:            display timezone for every event time (default UTC).
     """
     generated_at = generated_at or datetime.now(UTC)
+    if chains is None:
+        chains = build_chains(flagged)
+    flagged = flagged.copy()
+    flagged["chain_id"] = chain_ids_by_row(flagged, chains) if not flagged.empty else pd.Series(dtype=object)
+    display_columns = DISPLAY_COLUMNS + [c for c in OPTIONAL_DISPLAY_COLUMNS if c in flagged.columns]
+
     wb = Workbook()
 
     ws_summary = wb.active
     ws_summary.title = "Executive Summary"
-    _build_executive_summary(ws_summary, df, flagged, source_file, generated_at, parse_stats, suppressed)
+    _build_executive_summary(ws_summary, df, flagged, chains, source_file, generated_at, parse_stats, suppressed, tz)
 
-    ws_chains = wb.create_sheet("Attack Chains")
-    _build_attack_chains(ws_chains, flagged)
-
-    ws_raw = wb.create_sheet("Raw Flagged Events")
-    if flagged.empty:
-        _write_header(ws_raw, DISPLAY_COLUMNS)
-        _autosize_columns(ws_raw, DISPLAY_COLUMNS, [])
-    else:
-        _write_table(ws_raw, flagged, DISPLAY_COLUMNS)
-
-    ws_accounts = wb.create_sheet("Account-Group Changes")
-    _build_account_changes(ws_accounts, flagged)
-
-    ws_mitre = wb.create_sheet("MITRE ATT&CK Coverage")
-    _build_mitre_coverage(ws_mitre, flagged, rules)
+    _build_attack_chains(wb.create_sheet("Attack Chains"), chains, tz)
+    _build_detection_groups(wb.create_sheet("Detections by Rule"), flagged, tz)
+    _write_table(wb.create_sheet("Raw Flagged Events"), flagged.reindex(columns=display_columns), display_columns, tz)
+    _build_account_changes(wb.create_sheet("Account-Group Changes"), flagged, tz)
+    _build_mitre_coverage(wb.create_sheet("MITRE ATT&CK Coverage"), flagged, rules)
 
     wb.save(output_path)

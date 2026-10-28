@@ -149,6 +149,21 @@ def _is_machine(name: str) -> bool:
     return name.endswith("$")
 
 
+def _merge_account_names(names) -> list[str]:
+    """One display name per account, in first-seen order: 'jsmith',
+    'CONTOSO\\jsmith' and 'jsmith@CONTOSO.LOCAL' are listed once, preferring
+    the plain (domain-less) spelling when one was seen."""
+    chosen: dict[str, str] = {}
+    for name in names:
+        key = actor_key(name)
+        if key is None:
+            continue
+        plain = "\\" not in name and "@" not in name
+        if key not in chosen or (plain and ("\\" in chosen[key] or "@" in chosen[key])):
+            chosen[key] = name
+    return list(chosen.values())
+
+
 def _identities(records: list[dict], source_ips: list[str]) -> set[str]:
     keys: set[str] = set()
     distinct_users: set[str | None] = set()
@@ -263,15 +278,13 @@ def build_chains(flagged: pd.DataFrame, window_minutes: float = 60) -> list[Chai
         if len({s.rule_id for s in members}) < 2:
             continue
         members.sort(key=lambda s: (s.start_time, s.end_time))
-        users: list[str] = []
         ips: list[str] = []
         for s in members:
-            users += [u for u in s.users if u not in users]
             ips += [ip for ip in s.source_ips if ip not in ips]
         chains.append(
             Chain(
                 id="",
-                users=users,
+                users=_merge_account_names(name for s in members for name in s.users),
                 source_ips=ips,
                 stages=members,
                 severity=max((s.severity for s in members), key=lambda sev: SEVERITY_RANK.get(sev, -1)),

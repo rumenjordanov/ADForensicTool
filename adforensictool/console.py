@@ -12,6 +12,15 @@ import sys
 from colorama import Fore, Style
 from colorama import init as _colorama_init
 
+# Log-derived text (usernames, narratives with "→") can contain characters
+# the console's code page can't encode -- e.g. cp1251/cp1252 on Windows.
+# Replace them instead of crashing mid-run with UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass  # not a TextIOWrapper (e.g. captured by a test harness)
+
 _colorama_init(autoreset=True)
 
 
@@ -29,6 +38,11 @@ def warn(message: str) -> None:
 
 def error(message: str) -> None:
     print(f"{Fore.RED}[-]{Style.RESET_ALL} {message}", file=sys.stderr)
+
+
+def detail(message: str) -> None:
+    """An indented continuation line under a previous info/success line."""
+    print(f"    {message}")
 
 
 def progress(message: str) -> None:
