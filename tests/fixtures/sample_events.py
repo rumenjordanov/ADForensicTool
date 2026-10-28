@@ -15,15 +15,26 @@ def make_event_xml(
     timestamp: str,
     computer: str = "DC01.contoso.local",
     data: dict[str, str] | None = None,
+    user_data: tuple[str, str, dict[str, str]] | None = None,
 ) -> str:
     """Build a synthetic <Event> XML string for the given Event ID.
 
     `timestamp` should be an ISO-8601 UTC string, e.g. "2026-06-08T02:14:00.000000Z".
     `data` maps EventData "Name" attributes to values, matching what a real
     Security event of that Event ID would carry.
+
+    `user_data`, if given, is (element_name, xmlns, fields) and renders a
+    <UserData> block instead of <EventData> -- the shape some events (e.g.
+    a real 1102 audit-log-cleared) actually use.
     """
     data = data or {}
-    data_elements = "\n".join(f'    <Data Name="{name}">{value}</Data>' for name, value in data.items())
+    if user_data is not None:
+        element, xmlns, fields = user_data
+        children = "".join(f"<{k}>{v}</{k}>" for k, v in fields.items())
+        payload = f'  <UserData>\n    <{element} xmlns="{xmlns}">{children}</{element}>\n  </UserData>'
+    else:
+        data_elements = "\n".join(f'    <Data Name="{name}">{value}</Data>' for name, value in data.items())
+        payload = f"  <EventData>\n{data_elements}\n  </EventData>"
 
     return f"""<Event xmlns="{_NS}">
   <System>
@@ -42,9 +53,7 @@ def make_event_xml(
     <Computer>{computer}</Computer>
     <Security/>
   </System>
-  <EventData>
-{data_elements}
-  </EventData>
+{payload}
 </Event>"""
 
 
@@ -144,12 +153,21 @@ def group_membership_change_xml(
 
 
 def audit_log_cleared_xml(timestamp: str, performed_by: str = "administrator", computer: str = "DC01.contoso.local") -> str:
-    """A 1102 (audit log cleared) event."""
+    """A 1102 (audit log cleared) event, in the real UserData/LogFileCleared shape."""
     return make_event_xml(
         1102,
         timestamp,
         computer=computer,
-        data={"SubjectUserName": performed_by},
+        user_data=(
+            "LogFileCleared",
+            "http://manifests.microsoft.com/win/2004/08/windows/eventlog",
+            {
+                "SubjectUserSid": "S-1-5-21-1-2-3-500",
+                "SubjectUserName": performed_by,
+                "SubjectDomainName": "CONTOSO",
+                "SubjectLogonId": "0x3e7",
+            },
+        ),
     )
 
 
