@@ -202,5 +202,10 @@ STEP 16 Docs + sample report   (done)
       Windows caveat; install steps verified verbatim in a fresh venv),
       architecture, roadmap. Quoted narrative verified to match the sample.
 
-STEP 17 Push
-  [ ] Push `improvements` branch to GitHub.
+STEP 17 Final checks + push   (done)
+  [x] Full suite under Python 3.11 (via uv) and 3.12 with warnings as
+      errors. Found: pandas deprecates sort_values(inplace=True) (removed
+      in pandas 4) -> fixed; tests leaked file handles -> fixed.
+  [x] Swept the tree for stale "stub" docs, debug leftovers and real-machine
+      data from testing (none committed).
+  [x] Pushed the `improvements` branch to GitHub.
