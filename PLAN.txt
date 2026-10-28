@@ -81,12 +81,19 @@ STEP 8  Allowlist   (done)
       rejected; unknown rule ids in scopes warned about (typo guard).
       examples/allowlist.example.yaml added (validated by a test).
 
-STEP 9  Correlator
-  [ ] Implement build_chains per design notes: actor key = normalized user,
-      falling back to source_ip (host is NOT used - every event comes from
-      the DC). Known sequences, time window, severity = max of stages.
-      An event may appear in more than one chain.
-  [ ] Tests.
+STEP 9  Correlator   (done)
+  [x] build_chains: stages = threshold clusters / single events; identity =
+      normalized users + SIDs + non-machine subject_user; source_ip only for
+      stages with no account or several accounts (sprays); host never used.
+      Stages sharing an identity within window_minutes are linked
+      (transitively); components spanning >= 2 rules become chains.
+      Each event belongs to at most one chain (answer to the open question:
+      no double counting). Stages tagged with ATT&CK tactics.
+  [x] Tests (16). Found two bugs while testing: fixtures gave every account
+      the same SID, and machine accounts as an event's `user` (4698 by
+      DC01$) linked routine events. Fixed both; regression test verified to
+      fail without the fix.
+  [x] Perf: 16k findings took 15s (per-stage DataFrames) -> 0.5s.
 
 STEP 10 Narrator
   [ ] Templates per stage type + generic fallback; handles partial chains.

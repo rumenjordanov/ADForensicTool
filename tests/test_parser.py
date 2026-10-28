@@ -24,6 +24,7 @@ from tests.fixtures.sample_events import (
     group_membership_change_xml,
     kerberoasting_xml,
     make_event_xml,
+    sid_for,
     successful_logon_xml,
 )
 
@@ -65,7 +66,7 @@ def test_normalize_group_membership_change_exposes_extra_fields():
     # `user`, which made the account that was actually escalated invisible
     # (and impossible to correlate with e.g. a brute force against it).
     assert record["user"] == "jsmith"
-    assert record["user_sid"] == "S-1-5-21-1-2-3-1234"
+    assert record["user_sid"] == sid_for("jsmith")
     assert record["target_group"] == "Domain Admins"
     assert record["subject_user"] == "administrator"
 
