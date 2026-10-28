@@ -9,18 +9,18 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from parser.evtx_parser import normalize_record
-from rules.engine import apply_rules, load_rules
+from adforensictool.parser.evtx_parser import normalize_record
+from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
 from tests.fixtures.sample_events import (
     audit_log_cleared_xml,
     failed_logon_xml,
     group_membership_change_xml,
-    kerberos_preauth_failed_xml,
     kerberoasting_xml,
+    kerberos_preauth_failed_xml,
     make_event_xml,
 )
 
-RULES_PATH = "rules/default_rules.yaml"
+RULES_PATH = DEFAULT_RULES_PATH
 
 
 def _df_from_xml(xml_strings: list[str]) -> pd.DataFrame:

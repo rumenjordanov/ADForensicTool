@@ -16,7 +16,7 @@ Run: python examples/generate_sample_report.py
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -24,9 +24,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import pandas as pd
 
-from excel_export.report import build_report
-from parser.evtx_parser import normalize_record
-from rules.engine import apply_rules, load_rules
+from adforensictool.excel_export.report import build_report
+from adforensictool.parser.evtx_parser import normalize_record
+from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
 from tests.fixtures.sample_events import (
     audit_log_cleared_xml,
     failed_logon_xml,
@@ -36,7 +36,7 @@ from tests.fixtures.sample_events import (
 )
 
 OUTPUT_PATH = Path(__file__).parent / "sample_report.xlsx"
-RULES_PATH = REPO_ROOT / "rules" / "default_rules.yaml"
+RULES_PATH = DEFAULT_RULES_PATH
 
 
 def build_sample_events() -> list[str]:
@@ -94,7 +94,7 @@ def main() -> None:
         rules,
         str(OUTPUT_PATH),
         source_file="security.evtx (synthetic sample data, see examples/generate_sample_report.py)",
-        generated_at=datetime(2026, 3, 14, 5, 5, tzinfo=timezone.utc),
+        generated_at=datetime(2026, 3, 14, 5, 5, tzinfo=UTC),
     )
     print(f"Wrote {OUTPUT_PATH} ({len(flagged)} findings from {len(df)} synthetic events)")
 

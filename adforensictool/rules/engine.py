@@ -31,6 +31,8 @@ from typing import Any
 import pandas as pd
 import yaml
 
+DEFAULT_RULES_PATH = Path(__file__).parent / "default_rules.yaml"
+
 VALID_TYPES = {"threshold", "always_flag", "field_match"}
 
 
@@ -58,7 +60,7 @@ class Rule:
 
 
 def load_rules(yaml_path: str | Path) -> list[Rule]:
-    with open(yaml_path, "r", encoding="utf-8") as f:
+    with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     return [Rule(**raw) for raw in data.get("rules", [])]

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-from version import __version__ as TOOL_VERSION
+from adforensictool.version import __version__ as TOOL_VERSION  # noqa: F401  (re-exported for report.py)
 
 TOOL_NAME = "ADForensicTool"
 

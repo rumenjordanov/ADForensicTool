@@ -19,7 +19,7 @@ so every tab shares one look rather than five independently-styled sheets.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -34,8 +34,8 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from excel_export import theme
-from rules.engine import Rule
+from adforensictool.excel_export import theme
+from adforensictool.rules.engine import Rule
 
 SEVERITY_SCORE = {"critical": 40, "high": 20, "medium": 10, "low": 5}
 
@@ -144,7 +144,7 @@ def _build_banner(ws: Worksheet, source_file: str | None, generated_at: datetime
 
     _fill_range(ws, f"A1:{last_col_letter}3", theme.BANNER_FILL)
 
-    ws.merge_cells(f"A1:F2")
+    ws.merge_cells("A1:F2")
     title_cell = ws["A1"]
     title_cell.value = theme.TOOL_NAME
     title_cell.font = theme.BANNER_TITLE_FONT
@@ -498,7 +498,7 @@ def build_report(
     here (a `chains` parameter) and have _build_attack_chains render those
     instead of the per-rule grouping it falls back to today.
     """
-    generated_at = generated_at or datetime.now(timezone.utc)
+    generated_at = generated_at or datetime.now(UTC)
     wb = Workbook()
 
     ws_summary = wb.active
