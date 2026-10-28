@@ -1,0 +1,111 @@
+ADForensicTool improvement plan
+================================
+
+Work happens on the `improvements` branch. After each step: run the test
+suite + ruff, exercise the change by hand (CLI / generated report), fix
+anything found, commit, then move on. Push to GitHub at the end.
+
+Status legend: [ ] todo   [x] done   [-] skipped (reason given)
+
+STEP 1  Packaging   (done)
+  [x] Move code into an `adforensictool/` package (parser, rules, correlator,
+      narrator, excel_export, console, version, cli) so installing it no
+      longer drops top-level `parser`/`rules`/`console`/`main` modules into
+      site-packages.
+  [x] Keep `python main.py ...` working via a thin root shim.
+  [x] Ship default_rules.yaml as package data; single version source
+      (pyproject reads adforensictool/version.py dynamically).
+  [x] CI: add ruff lint + pytest-cov coverage.
+
+STEP 2  Excel formula injection
+  [ ] Escape any string cell value starting with = + - @ \t \r (prefix ')
+      in every place report.py writes log-derived text.
+  [ ] Regression test with a hostile username.
+
+STEP 3  Correct actor fields per event ID
+  [ ] Per-event-ID field mapping: `user` = account the event is about
+      (4728/4732/4756 -> the MEMBER added, not the group), new columns
+      `subject_user` (who performed it) and `target_group`.
+  [ ] Parse <UserData> as well as <EventData> (real 1102 events keep
+      SubjectUserName under UserData/LogFileCleared).
+  [ ] Tests.
+
+STEP 4  Parse statistics
+  [ ] Count records read / skipped (malformed); show in CLI and on the
+      Executive Summary (high skip counts = possible tampering).
+
+STEP 5  Rule engine hardening + generic conditions
+  [ ] Validate rules: unknown keys, severity values, duplicate ids, required
+      fields -> clear error naming the rule.
+  [ ] `match:` (AND list) and `exclude:` conditions on any rule type, with
+      equals / contains / startswith / endswith / regex, case-insensitive,
+      hex-normalized equals. Old `field`/`equals` form keeps working.
+  [ ] Kerberoasting: exclude krbtgt and machine ($) service names.
+
+STEP 6  New rule capabilities
+  [ ] threshold: `distinct_field` + `min_distinct` (password spraying: one
+      source IP failing against many different users).
+  [ ] New `followed_by` rule type: event that occurs within N minutes after
+      another rule fired for the same actor (logon after brute force,
+      persistence after suspicious logon).
+
+STEP 7  New detections (YAML)
+  [ ] password spraying, successful logon after brute force, AS-REP
+      roasting (4768 PreAuthType 0), DCSync (4662 replication GUIDs by a
+      non-machine account), account created (4720), scheduled task (4698),
+      service installed (4697 / 7045), audit policy changed (4719), DSRM
+      password set (4794), account lockout (4740), pass-the-hash style logon
+      (4624 LogonType 9 seclogo), persistence after suspicious logon.
+  [ ] MITRE names for all referenced techniques. Tests for each.
+
+STEP 8  Allowlist
+  [ ] `--allowlist file.yaml`: suppress flagged events by field conditions,
+      optionally scoped to specific rule ids. Suppressed count reported.
+
+STEP 9  Correlator
+  [ ] Implement build_chains per design notes: actor key = normalized user,
+      falling back to source_ip (host is NOT used - every event comes from
+      the DC). Known sequences, time window, severity = max of stages.
+      An event may appear in more than one chain.
+  [ ] Tests.
+
+STEP 10 Narrator
+  [ ] Templates per stage type + generic fallback; handles partial chains.
+  [ ] Tests.
+
+STEP 11 Report integration
+  [ ] Attack Chains tab renders real chains (+ per-rule detection groups
+      kept as a second section), narratives on Executive Summary, parse
+      stats, suppressed count, multiple source files.
+
+STEP 12 Input: multiple files / folders, faster parsing
+  [ ] `--input` accepts several files and/or directories (recursive *.evtx).
+      `source_file` column added so events stay traceable.
+  [ ] Event-ID prefilter: only fully parse records whose EventID some rule
+      references (cheap regex before XML parsing).
+  [ ] Optional fast backend: use the Rust-based `evtx` package when
+      installed (`--backend auto|python|rust`), python-evtx otherwise.
+
+STEP 13 Output formats + timezone
+  [ ] `--format xlsx,json,csv,timeline` (timeline = Timesketch-compatible CSV).
+  [ ] `--timezone` (IANA name) for displayed timestamps; zone shown in report.
+
+STEP 14 Sigma import (subset)
+  [ ] `--sigma` file/dir: convert simple Windows Security Sigma rules
+      (selection [+ "and not" filter], field modifiers contains/startswith/
+      endswith, EventID, level, attack tags) into engine rules; unsupported
+      rules skipped with a warning.
+
+STEP 15 Real .evtx fixture + release build
+  [ ] Commit a tiny real (empty, no personal data) .evtx so the binary
+      reader path is tested in CI.
+  [ ] GitHub Actions workflow that builds a standalone Windows .exe with
+      PyInstaller on version tags (no PyPI publishing - needs the owner's
+      PyPI account set up).
+
+STEP 16 Docs + sample report
+  [ ] Regenerate examples/sample_report.xlsx covering the new detections and
+      chains; update README (usage, rule schema, roadmap).
+
+STEP 17 Push
+  [ ] Push `improvements` branch to GitHub.

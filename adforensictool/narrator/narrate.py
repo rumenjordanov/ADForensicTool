@@ -41,7 +41,7 @@ Open question to resolve before implementing:
 """
 from __future__ import annotations
 
-from correlator.chain_builder import Chain
+from adforensictool.correlator.chain_builder import Chain
 
 
 def narrate_chain(chain: Chain) -> str:

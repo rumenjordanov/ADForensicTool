@@ -11,11 +11,13 @@ a real .evtx binary either.
 """
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 import pandas as pd
 import pytest
 
-from parser import evtx_parser
-from parser.evtx_parser import normalize_record
+from adforensictool.parser import evtx_parser
+from adforensictool.parser.evtx_parser import normalize_record
 from tests.fixtures.sample_events import (
     audit_log_cleared_xml,
     failed_logon_xml,
@@ -82,7 +84,7 @@ def test_normalize_kerberoasting_ticket_encryption_type():
 
 
 def test_normalize_record_raises_on_malformed_xml():
-    with pytest.raises(Exception):
+    with pytest.raises(ET.ParseError):
         normalize_record("<Event><System>")
 
 

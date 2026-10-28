@@ -8,14 +8,14 @@ exact colors/fonts -- that's better verified by opening the file manually.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 from openpyxl import load_workbook
 
-from excel_export.report import build_report
-from parser.evtx_parser import normalize_record
-from rules.engine import apply_rules, load_rules
+from adforensictool.excel_export.report import build_report
+from adforensictool.parser.evtx_parser import normalize_record
+from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
 from tests.fixtures.sample_events import failed_logon_xml, group_membership_change_xml
 
 EXPECTED_SHEETS = {
@@ -28,14 +28,14 @@ EXPECTED_SHEETS = {
 
 
 def test_build_report_with_findings(tmp_path):
-    rules = load_rules("rules/default_rules.yaml")
+    rules = load_rules(DEFAULT_RULES_PATH)
     xml = [failed_logon_xml(f"2026-06-08T02:{10 + i}:00.000000Z", user="jsmith") for i in range(5)]
     xml.append(group_membership_change_xml("2026-06-08T02:53:00.000000Z", member="jsmith", group="Domain Admins"))
     df = pd.DataFrame([normalize_record(x) for x in xml])
     flagged = apply_rules(df, rules)
 
     output_path = tmp_path / "report.xlsx"
-    generated_at = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    generated_at = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
     build_report(df, flagged, rules, str(output_path), source_file="security.evtx", generated_at=generated_at)
 
     assert output_path.exists()
@@ -66,7 +66,7 @@ def test_build_report_with_findings(tmp_path):
 
 
 def test_build_report_with_no_findings(tmp_path):
-    rules = load_rules("rules/default_rules.yaml")
+    rules = load_rules(DEFAULT_RULES_PATH)
     df = pd.DataFrame([normalize_record(failed_logon_xml("2026-06-08T02:10:00.000000Z"))])
     flagged = apply_rules(df, rules)  # single event, below every threshold -- empty
 

@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "adforensictool"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Reconstructs attacker narratives from Windows/Active Directory Security event logs (.evtx) into an analyst-ready Excel report."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,10 +18,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.5"]
 
 [project.scripts]
-adforensictool = "main:main"
+adforensictool = "adforensictool.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "adforensictool.version.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["adforensictool*"]
+
+[tool.setuptools.package-data]
+"adforensictool.rules" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 160
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# sys.path tweak must precede the project imports so the script runs from a checkout
+"examples/*.py" = ["E402"]

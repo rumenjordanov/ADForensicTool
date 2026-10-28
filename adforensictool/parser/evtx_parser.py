@@ -13,7 +13,8 @@ log entries, without needing a real .evtx fixture.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import pandas as pd
 
