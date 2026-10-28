@@ -73,9 +73,13 @@ STEP 7  New detections (YAML)   (done)
       parse time. fromisoformat fast path: 64s -> 9.4s, identical results.
       python-evtx's datetime.min (year 1) "no time" marker -> NaT.
 
-STEP 8  Allowlist
-  [ ] `--allowlist file.yaml`: suppress flagged events by field conditions,
-      optionally scoped to specific rule ids. Suppressed count reported.
+STEP 8  Allowlist   (done)
+  [x] `--allowlist file.yaml`: suppress flagged events by field conditions,
+      optionally scoped to specific rule ids. Suppressed counts shown in CLI
+      and on the Executive Summary. Runs after all rules, so allowlisted
+      noise can't hide a follow-on compromise. Entries without conditions
+      rejected; unknown rule ids in scopes warned about (typo guard).
+      examples/allowlist.example.yaml added (validated by a test).
 
 STEP 9  Correlator
   [ ] Implement build_chains per design notes: actor key = normalized user,
