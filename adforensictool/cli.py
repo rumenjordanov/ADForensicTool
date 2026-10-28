@@ -15,13 +15,25 @@ from typing import TypeVar
 import yaml
 
 from adforensictool import console
+from adforensictool.correlator.chain_builder import build_chains
 from adforensictool.excel_export.report import build_report
+from adforensictool.narrator.narrate import chain_headline, narrate_chain
 from adforensictool.parser.evtx_parser import ParseStats, parse_evtx
 from adforensictool.rules.allowlist import AllowEntry, apply_allowlist, load_allowlist, unknown_rule_references
 from adforensictool.rules.engine import DEFAULT_RULES_PATH, RuleError, apply_rules, load_rules
 from adforensictool.version import __version__
 
 T = TypeVar("T")
+
+
+def _positive_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0, got {text}")
+    return value
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -39,6 +51,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--allowlist",
         help="YAML file of known-benign activity to suppress from the results (see rules/allowlist.py)",
+    )
+    parser.add_argument(
+        "--chain-window",
+        type=_positive_float,
+        default=60,
+        metavar="MINUTES",
+        help="Max gap between two detections for the same account to be linked into one attack chain (default: 60)",
     )
     parser.add_argument(
         "--debug",
@@ -115,9 +134,26 @@ def _run(args: argparse.Namespace) -> int:
     for description, count in suppressed.items():
         console.info(f"  {count} flagged event(s) suppressed by allowlist: {description}")
 
+    console.info("Correlating flagged events into attack chains ...")
+    chains = build_chains(flagged, window_minutes=args.chain_window)
+    if chains:
+        console.warn(f"{len(chains)} attack chain(s) identified:")
+        for chain in chains:
+            console.detail(f"[{chain.severity.upper()}] {chain.id}: {chain_headline(chain, arrow='->')}")
+            console.detail(f"  {narrate_chain(chain)}")
+    else:
+        console.success("No multi-stage attack chains identified")
+
     console.info(f"Writing report to {args.output} ...")
     build_report(
-        df, flagged, rules, args.output, source_file=str(input_path), parse_stats=stats, suppressed=suppressed
+        df,
+        flagged,
+        rules,
+        args.output,
+        source_file=str(input_path),
+        parse_stats=stats,
+        suppressed=suppressed,
+        chains=chains,
     )
     console.success(f"Report written to {args.output}")
     return 0

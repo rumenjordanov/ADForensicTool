@@ -165,6 +165,17 @@ def test_empty_input():
     assert build_chains(pd.DataFrame()) == []
 
 
+def test_chain_lists_each_account_once_preferring_plain_name(rules):
+    """Regression test: the headline read 'jsmith and jsmith@CONTOSO.LOCAL'."""
+    xml = [
+        kerberoasting_xml(_ts(0), user="jsmith@CONTOSO.LOCAL"),
+        group_membership_change_xml(_ts(5), member="jsmith"),
+        audit_log_cleared_xml(_ts(6), performed_by="CONTOSO\\JSmith"),
+    ]
+    (chain,) = _chains(rules, xml)
+    assert chain.users == ["jsmith"]
+
+
 @pytest.mark.parametrize(
     "rule_id, technique, expected",
     [("brute_force", "T1110", "Credential Access"), ("custom", "T1543.003", "Persistence"), ("custom", "T9999", "Other")],

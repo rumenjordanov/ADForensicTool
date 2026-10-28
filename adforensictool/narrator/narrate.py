@@ -271,7 +271,10 @@ def narrate_chain(chain: Chain, tz: tzinfo | None = None) -> str:
     return f"{span} {clock.zone_name(chain.start_time)}: {text[0].upper()}{text[1:]}."
 
 
-def chain_headline(chain: Chain) -> str:
-    """Short title, e.g. 'Credential Access → Initial Access → Persistence (jsmith)'."""
+def chain_headline(chain: Chain, arrow: str = "→") -> str:
+    """Short title, e.g. 'Credential Access → Initial Access → Persistence (jsmith)'.
+
+    Pass arrow="->" for consoles whose code page lacks "→".
+    """
     who = _names(chain.users) if chain.users else _names(chain.source_ips)
-    return f"{' → '.join(chain.tactics)} ({who})"
+    return f"{f' {arrow} '.join(chain.tactics)} ({who})"
