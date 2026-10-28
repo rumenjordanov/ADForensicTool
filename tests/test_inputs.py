@@ -105,6 +105,36 @@ def test_record_id_gaps_are_reported_per_log(fake_files):
     assert stats.record_id_gaps() == [("a.evtx", "Security", "DC01.contoso.local", 10, 16, 2)]
 
 
+# -- member display names ---------------------------------------------------------------------
+
+
+def test_group_change_member_display_name_resolved_via_sid(fake_files):
+    """Regression test from a real lab DC: group changes name the member by
+    DN ("CN=John Smith,..."), so the report said "John Smith added to Domain
+    Admins" while every other event said "jsmith"."""
+    from tests.fixtures.sample_events import account_created_xml, make_event_xml, sid_for
+
+    fake_files["a.evtx"] = [
+        account_created_xml("2026-06-08T02:00:00Z", new_account="jsmith", performed_by="Administrator"),
+        make_event_xml(
+            4728,
+            "2026-06-08T02:05:00Z",
+            data={"MemberName": "CN=John Smith,CN=Users,DC=contoso,DC=local", "MemberSid": sid_for("jsmith"),
+                  "TargetUserName": "Domain Admins", "SubjectUserName": "Administrator"},
+        ),  # fmt: skip
+        make_event_xml(
+            4728,
+            "2026-06-08T02:06:00Z",
+            data={"MemberName": "CN=Unknown Person,DC=contoso,DC=local", "MemberSid": "S-1-5-21-9-9-9-9999",
+                  "TargetUserName": "Domain Admins"},
+        ),  # fmt: skip
+    ]
+    df = parse_evtx_files([Path("a.evtx")])
+    changes = df[df["event_id"] == 4728]
+    assert list(changes["user"]) == ["jsmith", "Unknown Person"]  # unresolvable SID keeps the CN
+    assert "John Smith" in changes.iloc[0]["event_data"]["MemberName"]
+
+
 # -- lost / corrupt records -------------------------------------------------------------------
 
 

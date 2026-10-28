@@ -26,3 +26,6 @@ venv/
 coverage.xml
 htmlcov/
 .ruff_cache/
+
+# Local lab captures and reports made from them -- real evidence, never commit
+test_data/

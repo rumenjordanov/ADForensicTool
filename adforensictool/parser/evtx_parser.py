@@ -461,6 +461,35 @@ def parse_evtx(
     return df
 
 
+_MEMBER_CHANGE_IDS = (4728, 4729, 4732, 4733, 4756, 4757)
+
+
+def resolve_member_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace group-change members' display names with account names.
+
+    Group membership events identify the member by distinguished name, so
+    `user` holds its CN -- "John Smith" -- while every other event calls
+    the same account "jsmith". Where the member's SID also appears on an
+    event that names the account (a 4720 creating it, a 4624 logon, ...),
+    use that name, so the report and narrative say "jsmith added to Domain
+    Admins". The original DN stays in event_data["MemberName"].
+    """
+    if df.empty or "user_sid" not in df.columns:
+        return df
+    is_member_change = df["event_id"].isin(_MEMBER_CHANGE_IDS)
+    named = df[~is_member_change & df["user"].notna() & df["user_sid"].notna()]
+    sid_to_name: dict[str, str] = {}
+    for sid, name in zip(named["user_sid"], named["user"], strict=True):
+        if str(sid).upper().startswith("S-1-5-21-"):
+            sid_to_name.setdefault(sid, name)
+    if not sid_to_name:
+        return df
+    df = df.copy()
+    resolved = df.loc[is_member_change, "user_sid"].map(sid_to_name)
+    df.loc[resolved.dropna().index, "user"] = resolved.dropna()
+    return df
+
+
 def find_evtx_files(inputs: list[str]) -> list[Path]:
     """Expand a mix of files and directories (searched recursively for
     *.evtx) into a de-duplicated, ordered list of files."""
@@ -514,4 +543,4 @@ def parse_evtx_files(
         stats.records_duplicate += int(dupes.sum())
         df = df.drop(index=dupes[dupes].index)
     df = df.sort_values("timestamp", kind="stable", ignore_index=True)
-    return df
+    return resolve_member_names(df)

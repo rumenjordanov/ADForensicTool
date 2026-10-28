@@ -153,6 +153,51 @@ def test_machine_account_as_the_events_account_does_not_link(rules):
     assert _chains(rules, xml) == []
 
 
+def test_builtin_identities_do_not_link(rules):
+    """Regression test from a real lab DC: domain promotion logs krbtgt's
+    creation and the default group memberships as performed by ANONYMOUS
+    LOGON (S-1-5-7). Treating it as an actor glued that setup noise onto
+    the first real attack chain."""
+    xml = [
+        account_created_xml(_ts(0), new_account="krbtgt", performed_by="ANONYMOUS LOGON"),
+        group_membership_change_xml(_ts(0), member="Administrator", group="Domain Admins", performed_by="ANONYMOUS LOGON"),
+        scheduled_task_xml(_ts(1), performed_by="SYSTEM"),
+        service_installed_xml(_ts(2), performed_by="NETWORK SERVICE"),
+    ]
+    assert _chains(rules, xml) == []
+
+
+@pytest.mark.parametrize("performer", ["ANONYMOUS LOGON", "WIN-DSS3V909V5B$"])
+def test_os_setup_account_creation_is_not_a_chain(rules, performer):
+    """Regression test from real lab logs: Windows setup / DC promotion
+    creates accounts and adds them to default groups (performed by a machine
+    account or ANONYMOUS LOGON). Linked through the created account's own
+    name, that formed bogus 'Persistence -> Privilege Escalation' chains."""
+    xml = [
+        account_created_xml(_ts(0), new_account="krbtgt", performed_by=performer),
+        group_membership_change_xml(_ts(0), member="krbtgt", group="Denied RODC Password Replication Group", performed_by=performer),
+    ]
+    assert _chains(rules, xml) == []
+
+
+def test_same_shape_by_a_person_is_still_a_chain(rules):
+    xml = [
+        account_created_xml(_ts(0), new_account="backdoor", performed_by="jsmith"),
+        group_membership_change_xml(_ts(1), member="backdoor", group="Domain Admins", performed_by="jsmith"),
+    ]
+    assert len(_chains(rules, xml)) == 1
+
+
+def test_key_accounts_prefer_plain_names_and_skip_builtins(rules):
+    xml = [
+        kerberoasting_xml(_ts(0), user="Administrator@CONTOSO.LOCAL"),
+        account_created_xml(_ts(1), new_account="jdoe", performed_by="Administrator"),
+        group_membership_change_xml(_ts(2), member="jdoe", performed_by="Administrator"),
+    ]
+    (chain,) = _chains(rules, xml)
+    assert chain.key_accounts == ["Administrator", "jdoe"]
+
+
 def test_chains_ordered_by_severity_then_time(rules):
     # medium-only chain first in time, critical chain later
     xml = [

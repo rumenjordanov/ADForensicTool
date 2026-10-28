@@ -140,13 +140,17 @@ class Chain:
         on and escalated, not the nine others that were merely sprayed.
         Falls back to all accounts when none recurs."""
         counts: dict[str, int] = {}
-        display = {actor_key(u): u for u in self.users}
+        seen_names: list[str] = []
         for stage in self.stages:
-            names = set(stage.users)
+            names = {u for u in stage.users if _is_actor(u)}
             if "subject_user" in stage.events:
-                names |= {s for s in stage.events["subject_user"].dropna().astype(str) if s and not _is_machine(s)}
+                names |= {s for s in stage.events["subject_user"].dropna().astype(str) if s and _is_actor(s)}
+            seen_names += sorted(names)
             for key in {actor_key(n) for n in names} - {None}:
                 counts[key] = counts.get(key, 0) + 1
+        # one display spelling per account, preferring "Administrator" over
+        # "Administrator@CONTOSO.LOCAL"
+        display = {actor_key(n): n for n in _merge_account_names(self.users + seen_names)}
         recurring = sorted((k for k, c in counts.items() if c > 1), key=lambda k: -counts[k])
         if not recurring:
             return self.users
@@ -166,6 +170,25 @@ def _distinct(records: list[dict], column: str) -> list[str]:
 
 def _is_machine(name: str) -> bool:
     return name.endswith("$")
+
+
+# Built-in service identities. They are the "subject" of huge numbers of
+# routine events -- a real DC promotion logs krbtgt's creation and every
+# default group membership as performed by ANONYMOUS LOGON -- so treating
+# them as a person glues unrelated activity into one chain.
+NON_ACTOR_ACCOUNTS = {"anonymous logon", "system", "local system", "local service", "network service"}
+
+
+def _is_actor(name: str) -> bool:
+    """Could this account name be a person/attacker worth following?"""
+    return not _is_machine(name) and actor_key(name) not in NON_ACTOR_ACCOUNTS
+
+
+def _is_account_sid(sid: str) -> bool:
+    """Domain/local account SIDs (S-1-5-21-...). Well-known SIDs such as
+    S-1-5-7 (anonymous), S-1-5-18 (SYSTEM) or S-1-5-11 (Authenticated
+    Users) are shared by everything and identify no one."""
+    return sid.upper().startswith("S-1-5-21-")
 
 
 def _merge_account_names(names) -> list[str]:
@@ -191,14 +214,17 @@ def _identities(records: list[dict], source_ips: list[str]) -> set[str]:
         subject = _text(row.get("subject_user"))
         if user:
             distinct_users.add(actor_key(user))
-            # A machine account as the event's account (e.g. a task created
-            # by DC01$) says nothing about who the attacker is; neither does
-            # its SID, which on such rows is the machine's.
-            if not _is_machine(user):
+            # A machine account or built-in identity as the event's account
+            # (a task created by DC01$, an account created by ANONYMOUS
+            # LOGON) says nothing about who the attacker is; neither does
+            # its SID.
+            if _is_actor(user):
                 keys.add(f"user:{actor_key(user)}")
-                if sid := _text(row.get("user_sid")):
+                if (sid := _text(row.get("user_sid"))) and _is_account_sid(sid):
                     keys.add(f"sid:{sid}")
-        if subject and not _is_machine(subject):
+        elif (sid := _text(row.get("user_sid"))) and _is_account_sid(sid):
+            keys.add(f"sid:{sid}")  # e.g. a group change whose member name was "-"
+        if subject and _is_actor(subject):
             keys.add(f"user:{actor_key(subject)}")
     if not keys or len(distinct_users) > 1:
         keys.update(f"ip:{ip}" for ip in source_ips)
@@ -238,6 +264,23 @@ def _split_stages(flagged: pd.DataFrame) -> list[tuple[ChainStage, set[str]]]:
         out.append((stage, _identities(records, source_ips)))
     out.sort(key=lambda pair: (pair[0].start_time, pair[0].end_time))
     return out
+
+
+def _performed_by_system_only(stages: list[ChainStage]) -> bool:
+    """True when every event in these stages was performed by a machine
+    account or built-in identity: Windows setting itself up (Windows
+    installation creating local accounts as WIN-XXXX$, DC promotion creating
+    krbtgt as ANONYMOUS LOGON), not an intrusion. Events with no performer
+    at all (failed logons, ticket requests) don't count as system-performed,
+    so real chains built from those are kept."""
+    for stage in stages:
+        if "subject_user" not in stage.events:
+            return False
+        for subject in stage.events["subject_user"]:
+            name = _text(subject)
+            if name is None or _is_actor(name):
+                return False
+    return True
 
 
 class _UnionFind:
@@ -294,7 +337,7 @@ def build_chains(flagged: pd.DataFrame, window_minutes: float = 60) -> list[Chai
 
     chains = []
     for members in components.values():
-        if len({s.rule_id for s in members}) < 2:
+        if len({s.rule_id for s in members}) < 2 or _performed_by_system_only(members):
             continue
         members.sort(key=lambda s: (s.start_time, s.end_time))
         ips: list[str] = []
