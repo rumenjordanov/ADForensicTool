@@ -133,6 +133,25 @@ class Chain:
     def event_count(self) -> int:
         return sum(s.event_count for s in self.stages)
 
+    @property
+    def key_accounts(self) -> list[str]:
+        """Accounts involved (as target or actor) in more than one stage,
+        most involved first -- e.g. the one sprayed account that then logged
+        on and escalated, not the nine others that were merely sprayed.
+        Falls back to all accounts when none recurs."""
+        counts: dict[str, int] = {}
+        display = {actor_key(u): u for u in self.users}
+        for stage in self.stages:
+            names = set(stage.users)
+            if "subject_user" in stage.events:
+                names |= {s for s in stage.events["subject_user"].dropna().astype(str) if s and not _is_machine(s)}
+            for key in {actor_key(n) for n in names} - {None}:
+                counts[key] = counts.get(key, 0) + 1
+        recurring = sorted((k for k, c in counts.items() if c > 1), key=lambda k: -counts[k])
+        if not recurring:
+            return self.users
+        return [display.get(k, k) for k in recurring]
+
 
 def _text(value) -> str | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
