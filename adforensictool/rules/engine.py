@@ -61,6 +61,8 @@ NORMALIZED_COLUMNS = {
     "logon_type",
     "process_name",
     "source_file",
+    "record_id",
+    "channel",
 }
 
 FLAG_COLUMNS = ["rule_id", "rule_name", "severity", "mitre_technique", "cluster_id"]
@@ -225,6 +227,9 @@ class Rule:
     type: str
     event_ids: list[int]
     description: str = ""
+    # Event IDs are only unique per provider: the Application log has its own,
+    # unrelated 4625s and 1102s. Events whose channel is unknown still match.
+    channels: list[str] = dc_field(default_factory=lambda: ["Security"])
     match: list[Condition] = dc_field(default_factory=list)
     exclude: list[list[Condition]] = dc_field(default_factory=list)
     # threshold
@@ -249,6 +254,8 @@ class Rule:
             raise RuleError(f"Rule '{self.id}': severity must be one of {', '.join(VALID_SEVERITIES)}, got '{self.severity}'")
         if not self.event_ids or not all(isinstance(e, int) for e in self.event_ids):
             raise RuleError(f"Rule '{self.id}': event_ids must be a non-empty list of integers")
+        if not self.channels or not all(isinstance(c, str) and c for c in self.channels):
+            raise RuleError(f"Rule '{self.id}': channels must be a non-empty list of log names, e.g. [Security, System]")
 
         if self.field or self.equals:
             if not (self.field and self.equals):
@@ -267,7 +274,7 @@ class Rule:
 
 
 _RULE_KEYS = {
-    "id", "name", "severity", "mitre_technique", "type", "event_ids", "description", "match", "exclude",
+    "id", "name", "severity", "mitre_technique", "type", "event_ids", "description", "channels", "match", "exclude",
     "group_by", "window_minutes", "min_count", "distinct_field", "min_distinct",
     "field", "equals", "after", "within_minutes", "join_on", "join_on_later",
 }  # fmt: skip
@@ -295,7 +302,7 @@ def rule_from_dict(raw: Any, index: int = 0) -> Rule:
         kwargs["equals"] = [kwargs["equals"]]
     kwargs["match"] = [parse_condition(c, rule_id) for c in raw.get("match") or []]
     kwargs["exclude"] = _parse_exclude(raw.get("exclude") or [], rule_id)
-    for list_key in ("after", "join_on", "join_on_later"):
+    for list_key in ("after", "join_on", "join_on_later", "channels"):
         if list_key in kwargs and isinstance(kwargs[list_key], str):
             kwargs[list_key] = [kwargs[list_key]]
     return Rule(**kwargs)
@@ -360,6 +367,10 @@ def merge_rules(*rule_lists: list[Rule]) -> list[Rule]:
 
 def _candidates(df: pd.DataFrame, rule: Rule) -> pd.DataFrame:
     subset = df[df["event_id"].isin(rule.event_ids)]
+    if "channel" in subset.columns and not subset.empty:
+        wanted = {c.casefold() for c in rule.channels}
+        channel = subset["channel"]
+        subset = subset[channel.isna() | channel.astype(str).str.casefold().isin(wanted)]
     return filter_by_conditions(subset, rule.match, rule.exclude).copy()
 
 

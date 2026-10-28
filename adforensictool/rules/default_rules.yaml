@@ -7,6 +7,9 @@
 #   mitre_technique   MITRE ATT&CK technique ID (informational, shown in coverage tab)
 #   type              threshold | always_flag | field_match | followed_by  (see rules/engine.py)
 #   event_ids         list of Windows Event IDs this rule looks at
+#   channels          optional, default [Security]: logs the event must come from.
+#                     Event IDs are only unique per provider -- the Application
+#                     log has its own, unrelated 4625s and 1102s.
 #   description       optional free text
 #
 # Conditions (optional on every rule type):
@@ -207,6 +210,7 @@ rules:
     mitre_technique: T1543.003
     type: always_flag
     event_ids: [4697, 7045]
+    channels: [Security, System]
 
   - id: persistence_after_suspicious_logon
     name: "Persistence Created After Suspicious Logon"

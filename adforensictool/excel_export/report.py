@@ -65,6 +65,7 @@ MITRE_NAMES = {
 DISPLAY_COLUMNS = [
     "timestamp",
     "event_id",
+    "record_id",
     "rule_name",
     "severity",
     "mitre_technique",
@@ -284,11 +285,16 @@ def _write_kpi_tile(ws: Worksheet, start_col: int, label: str, value: str, value
 
 
 def _build_kpi_row(
-    ws: Worksheet, df: pd.DataFrame, flagged: pd.DataFrame, chains: list[Chain], risk_score: int, severity_counts: dict
+    ws: Worksheet,
+    records_read: int,
+    flagged: pd.DataFrame,
+    chains: list[Chain],
+    risk_score: int,
+    severity_counts: dict,
 ) -> None:
     risk_label, risk_color = theme.risk_band(risk_score)
     _write_kpi_tile(ws, 2, f"OVERALL RISK ({risk_label})", f"{risk_score}/100", risk_color)
-    _write_kpi_tile(ws, 4, "EVENTS PARSED", str(len(df)), theme.BRAND_DARK)
+    _write_kpi_tile(ws, 4, "LOG RECORDS READ", str(records_read), theme.BRAND_DARK)
     _write_kpi_tile(ws, 6, "EVENTS FLAGGED", str(len(flagged)), theme.BRAND_DARK)
     chain_color = theme.SEVERITY_TEXT_COLORS["critical"] if chains else theme.BRAND_DARK
     _write_kpi_tile(ws, 8, "ATTACK CHAINS", str(len(chains)), chain_color)
@@ -458,7 +464,10 @@ def _build_executive_summary(
     risk_score = min(100, sum(SEVERITY_SCORE.get(sev, 0) * count for sev, count in severity_counts.items()))
 
     _build_banner(ws, source_file, generated_at)
-    _build_kpi_row(ws, df, flagged, chains, risk_score, severity_counts)
+    # With the Event-ID prefilter, df holds only rule-relevant events; the
+    # number of records actually read comes from the parse stats.
+    records_read = parse_stats.records_read if parse_stats is not None and parse_stats.records_read else len(df)
+    _build_kpi_row(ws, records_read, flagged, chains, risk_score, severity_counts)
     r = _build_charts(ws, flagged)
 
     if chains:
@@ -497,6 +506,31 @@ def _build_executive_summary(
                 "verify the source log's integrity."
             ),
             Font(color=theme.SEVERITY_TEXT_COLORS["high"], bold=True),
+        )
+        r += 1
+
+    for file, channel, computer, low, high, missing in parse_stats.record_id_gaps() if parse_stats is not None else []:
+        r += 1
+        name = file.replace("\\", "/").rsplit("/", 1)[-1]
+        _write_wide_row(
+            ws,
+            r,
+            (
+                f"  ▲  {name} [{channel or '?'} log, {computer or '?'}]: {missing} EventRecordID(s) missing between "
+                f"{low} and {high}. Expected if this is a filtered export; in a complete export it means records "
+                "were lost or individually deleted (an anti-forensics technique that leaves no 1102 event)."
+            ),
+            Font(color=theme.SEVERITY_TEXT_COLORS["high"], bold=True),
+        )
+        r += 1
+
+    if parse_stats is not None and parse_stats.records_duplicate:
+        r += 1
+        _write_wide_row(
+            ws,
+            r,
+            f"  ○  {parse_stats.records_duplicate} record(s) appeared in more than one input file and were counted once.",
+            Font(italic=True, color=theme.SLATE),
         )
         r += 1
 
