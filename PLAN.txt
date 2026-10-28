@@ -148,9 +148,18 @@ STEP 12 Input: multiple files / folders, faster parsing   (done)
       events; verified to contain no identifying data). Banner shows file
       names, not full paths (fixes overflow noted in step 11).
 
-STEP 13 Output formats + timezone
-  [ ] `--format xlsx,json,csv,timeline` (timeline = Timesketch-compatible CSV).
-  [ ] `--timezone` (IANA name) for displayed timestamps; zone shown in report.
+STEP 13 Output formats + timezone   (done)
+  [x] `--format xlsx,json,csv,timeline` (timeline = Timesketch-compatible CSV,
+      always UTC); default inferred from --output's extension; several
+      formats are written side by side. JSON carries stats, record-ID gaps,
+      allowlist counts, chains (narrative + stages) and all findings.
+  [x] CSV formula-injection escaping (= + @ \t \r, and "-" unless a plain
+      number) -- unit tested. Checked in real Excel via COM: .xlsx shows the
+      hostile value as text with 0 formula cells (conclusive); for CSV the
+      check was INCONCLUSIVE: an unescaped positive control did not evaluate
+      either when opened through automation, so CSV relies on unit tests.
+  [x] `--timezone` (IANA name) for all displayed times (report, console,
+      CSV, JSON); tzdata declared for Windows.
 
 STEP 14 Sigma import (subset)
   [ ] `--sigma` file/dir: convert simple Windows Security Sigma rules
