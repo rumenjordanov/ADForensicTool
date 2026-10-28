@@ -81,6 +81,23 @@ def test_persistence_event_described_once_under_its_most_specific_rule(rules):
     assert len(phrases) == 3
 
 
+def test_event_flagged_by_two_equal_rules_is_narrated_once(rules):
+    """Regression test: with an imported Sigma rule flagging the same ticket
+    request as the built-in kerberoasting rule (same severity), the
+    narrative described the one request twice."""
+    sigma_like = parse_rules(
+        {"rules": [{"id": "sigma_rc4", "name": "RC4 Ticket (Sigma)", "severity": "high", "mitre_technique": "T1558.003",
+                    "type": "always_flag", "event_ids": [4769]}]}
+    )[0]  # fmt: skip
+    xml = [kerberoasting_xml(_ts(0), user="jsmith"), group_membership_change_xml(_ts(5), member="jsmith")]
+    df = pd.DataFrame([normalize_record(x) for x in xml])
+    for ordered in ([*rules, sigma_like], [sigma_like, *rules]):  # independent of rule order
+        (chain,) = build_chains(apply_rules(df, ordered))
+        phrases = narrate_stages(chain)
+        assert len(phrases) == 2
+        assert "(Kerberoasting)" in phrases[0]  # the built-in rule's dedicated phrase wins
+
+
 def test_repeated_stages_of_one_rule_merge_into_one_phrase(rules):
     xml = [kerberoasting_xml(_ts(i), user="jsmith", service=f"MSSQLSvc/db0{i}") for i in range(3)]
     xml.append(group_membership_change_xml(_ts(10), member="jsmith"))

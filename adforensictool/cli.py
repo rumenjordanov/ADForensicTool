@@ -22,7 +22,8 @@ from adforensictool.exporters import FORMATS, infer_formats, output_paths, write
 from adforensictool.narrator.narrate import chain_headline, narrate_chain
 from adforensictool.parser.evtx_parser import BACKENDS, ParseStats, find_evtx_files, parse_evtx_files, resolve_backend
 from adforensictool.rules.allowlist import AllowEntry, apply_allowlist, load_allowlist, unknown_rule_references
-from adforensictool.rules.engine import DEFAULT_RULES_PATH, RuleError, apply_rules, load_rules
+from adforensictool.rules.engine import DEFAULT_RULES_PATH, RuleError, apply_rules, load_rules, merge_rules
+from adforensictool.rules.sigma import load_sigma
 from adforensictool.version import __version__
 
 T = TypeVar("T")
@@ -88,6 +89,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--rules",
         default=str(DEFAULT_RULES_PATH),
         help="Path to a detection rules YAML file (default: rules/default_rules.yaml)",
+    )
+    parser.add_argument(
+        "--sigma",
+        nargs="+",
+        metavar="PATH",
+        help="Sigma rule files/directories to run in addition to --rules (Windows security/system subset; "
+        "unsupported rules are listed and skipped)",
     )
     parser.add_argument(
         "--allowlist",
@@ -169,8 +177,25 @@ def _run(args: argparse.Namespace) -> int:
         return 1
     if rules:
         console.success(f"Loaded {len(rules)} rule(s)")
-    else:
-        console.warn(f"{rules_path} contains no rules -- nothing will be flagged")
+
+    if args.sigma:
+        console.info(f"Converting Sigma rules from {', '.join(args.sigma)} ...")
+        try:
+            sigma = load_sigma(args.sigma)
+            rules = merge_rules(rules, sigma.rules)
+        except (FileNotFoundError, RuleError) as exc:
+            console.error(str(exc))
+            return 1
+        console.success(f"Converted {len(sigma.rules)} Sigma rule(s)")
+        if sigma.skipped:
+            console.warn(f"{len(sigma.skipped)} Sigma rule(s) skipped (outside the supported subset):")
+            for file, reason in sigma.skipped[:10]:
+                console.detail(f"{Path(file).name}: {reason}")
+            if len(sigma.skipped) > 10:
+                console.detail(f"... and {len(sigma.skipped) - 10} more")
+
+    if not rules:
+        console.warn("no detection rules loaded -- nothing will be flagged")
 
     allowlist: list[AllowEntry] = []
     if args.allowlist:

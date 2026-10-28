@@ -1,0 +1,25 @@
+title: RC4 Service Ticket For A User Service Account
+id: 7c1f6a42-2b0e-4a51-9d3e-5f0a8c7e1d21
+status: experimental
+description: >
+  A Kerberos service ticket encrypted with RC4-HMAC was issued for a service
+  that is not a computer account or krbtgt -- the ticket is crackable
+  offline (Kerberoasting). Example rule for ADForensicTool's --sigma option.
+author: ADForensicTool examples
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4769
+    TicketEncryptionType: '0x17'
+    Status: '0x0'
+  filter_machine:
+    ServiceName|endswith: '$'
+  filter_krbtgt:
+    ServiceName: krbtgt
+  condition: selection and not 1 of filter_*
+level: high
+tags:
+  - attack.credential_access
+  - attack.t1558.003
