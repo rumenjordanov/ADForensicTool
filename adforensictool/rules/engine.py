@@ -153,7 +153,7 @@ class Condition:
         return any(folded.endswith(n) for n in self._needles)
 
 
-def _parse_condition(raw: Any, rule_id: str) -> Condition:
+def parse_condition(raw: Any, rule_id: str) -> Condition:
     if not isinstance(raw, dict) or "field" not in raw:
         raise RuleError(f"Rule '{rule_id}': each condition needs a 'field' and one of {', '.join(CONDITION_OPS)}")
     ops = [k for k in raw if k != "field"]
@@ -181,9 +181,9 @@ def _parse_exclude(raw: Any, rule_id: str) -> list[list[Condition]]:
     groups = []
     for entry in raw:
         if isinstance(entry, dict) and set(entry) == {"all"}:
-            groups.append([_parse_condition(c, rule_id) for c in entry["all"]])
+            groups.append([parse_condition(c, rule_id) for c in entry["all"]])
         else:
-            groups.append([_parse_condition(entry, rule_id)])
+            groups.append([parse_condition(entry, rule_id)])
     return groups
 
 
@@ -293,7 +293,7 @@ def rule_from_dict(raw: Any, index: int = 0) -> Rule:
         kwargs["event_ids"] = [kwargs["event_ids"]]
     if "equals" in kwargs and not isinstance(kwargs["equals"], list):
         kwargs["equals"] = [kwargs["equals"]]
-    kwargs["match"] = [_parse_condition(c, rule_id) for c in raw.get("match") or []]
+    kwargs["match"] = [parse_condition(c, rule_id) for c in raw.get("match") or []]
     kwargs["exclude"] = _parse_exclude(raw.get("exclude") or [], rule_id)
     for list_key in ("after", "join_on", "join_on_later"):
         if list_key in kwargs and isinstance(kwargs[list_key], str):

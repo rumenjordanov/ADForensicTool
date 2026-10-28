@@ -1,0 +1,30 @@
+# Example allowlist for ADForensicTool. Use with:
+#   adforensictool --input security.evtx --output report.xlsx --allowlist allowlist.yaml
+#
+# Each entry suppresses flagged events whose fields match ALL of its
+# conditions (same condition syntax as rule `match:` lists). `rules`
+# optionally limits the entry to specific rule ids; leave it out to apply to
+# every rule. Suppressed counts are still listed on the Executive Summary,
+# and suppression happens after all rules ran, so e.g. a compromise that
+# follows allowlisted scanner noise is still detected.
+
+allowlist:
+  - description: "Vulnerability scanner (authenticated scans fail logons by design)"
+    rules: [brute_force, password_spray, account_lockout]
+    match:
+      - field: source_ip
+        equals: ["10.0.0.50", "10.0.0.51"]
+
+  - description: "Azure AD Connect sync account replicates directory changes by design"
+    rules: [dcsync]
+    match:
+      - field: subject_user
+        startswith: MSOL_
+
+  - description: "Legacy app that still requests RC4 tickets for its own service"
+    rules: [kerberoasting]
+    match:
+      - field: user
+        equals: svc_legacyapp
+      - field: ServiceName
+        equals: HTTP/legacyapp.contoso.local

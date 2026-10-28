@@ -364,6 +364,7 @@ def _build_executive_summary(
     source_file: str | None,
     generated_at: datetime,
     parse_stats: ParseStats | None = None,
+    suppressed: dict[str, int] | None = None,
 ) -> None:
     for col in range(1, DASHBOARD_LAST_COL + 1):
         ws.column_dimensions[get_column_letter(col)].width = 11
@@ -413,6 +414,18 @@ def _build_executive_summary(
                 "verify the source log's integrity."
             ),
             Font(color=theme.SEVERITY_TEXT_COLORS["high"], bold=True),
+        )
+        r += 1
+
+    if suppressed:
+        r += 1
+        total = sum(suppressed.values())
+        detail = "; ".join(f"{desc} ({count})" for desc, count in suppressed.items())
+        _write_wide_row(
+            ws,
+            r,
+            f"  ○  {total} flagged event(s) suppressed by the allowlist and not shown in this report: {detail}",
+            Font(italic=True, color=theme.SLATE),
         )
         r += 1
 
@@ -534,6 +547,7 @@ def build_report(
     source_file: str | None = None,
     generated_at: datetime | None = None,
     parse_stats: ParseStats | None = None,
+    suppressed: dict[str, int] | None = None,
 ) -> None:
     """Build the .xlsx report and write it to output_path.
 
@@ -548,6 +562,9 @@ def build_report(
                    to now (UTC) if not supplied.
     parse_stats:   record read/skip counters from parse_evtx; a non-zero skip
                    count is called out on the Executive Summary.
+    suppressed:    {allowlist entry description: events it suppressed}, from
+                   rules.allowlist.apply_allowlist; summarized on the
+                   Executive Summary so hidden findings are never silent.
 
     TODO: once correlator/chain_builder.py exists, pass its Chain objects in
     here (a `chains` parameter) and have _build_attack_chains render those
@@ -558,7 +575,7 @@ def build_report(
 
     ws_summary = wb.active
     ws_summary.title = "Executive Summary"
-    _build_executive_summary(ws_summary, df, flagged, source_file, generated_at, parse_stats)
+    _build_executive_summary(ws_summary, df, flagged, source_file, generated_at, parse_stats, suppressed)
 
     ws_chains = wb.create_sheet("Attack Chains")
     _build_attack_chains(ws_chains, flagged)
