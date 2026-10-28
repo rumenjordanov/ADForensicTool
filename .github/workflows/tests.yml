@@ -32,3 +32,15 @@ jobs:
 
       - name: Run tests
         run: pytest -v --cov=adforensictool --cov-report=term-missing
+
+      # Install the package the way a user would and run the installed
+      # command from outside the checkout, so a missing package-data file
+      # (rules YAML) or a broken entry point fails CI.
+      - name: Smoke test installed CLI
+        shell: bash
+        run: |
+          pip install .
+          cd "$RUNNER_TEMP"
+          adforensictool --version
+          adforensictool --input "$GITHUB_WORKSPACE/tests/fixtures/empty.evtx" --output smoke.xlsx --format xlsx,json,csv,timeline
+          test -s smoke.xlsx && test -s smoke.json && test -s smoke.csv && test -s smoke.timeline.csv
