@@ -21,18 +21,39 @@ timestamp-anchored sentence:
 Output is a polished, analyst-ready Excel workbook, plus optional JSON, CSV
 and a Timesketch-importable timeline.
 
+![Executive Summary tab of the sample report](docs/images/executive-summary.png)
+
 Want to see the output before installing anything? [`examples/sample_report.xlsx`](examples/sample_report.xlsx)
 (and its machine-readable twin [`sample_report.json`](examples/sample_report.json))
 is a full report built from synthetic data (no real logs involved): a
-fictional three-chain intrusion covering most detections. Regenerate it any
-time with `python examples/generate_sample_report.py`.
+fictional three-chain intrusion that fires every default detection.
+Regenerate it any time with `python examples/generate_sample_report.py`.
+The screenshots in this README are taken from that sample.
+
+## What's new in 0.2.0
+
+- **Attack chains and narratives** — detections for the same account are
+  correlated into multi-stage chains, each told as one sentence on the
+  Executive Summary and broken down stage by stage on the Attack Chains tab.
+- **16 detections** (was 4): password spraying, logon after brute force,
+  DCSync, AS-REP roasting, pass-the-hash, persistence after a suspicious
+  logon, audit policy weakened, DSRM password set and more.
+- **Log integrity checks** — corrupted records no longer abort the parse,
+  lost records are counted, and EventRecordID gaps (individually deleted
+  records) are reported.
+- **More input and output** — several files or folders at once (e.g. every
+  DC), JSON / CSV / Timesketch timeline output, `--timezone`, Sigma rule
+  import, an allowlist, and an optional Rust parser that is ~45x faster.
+- **Safer and sturdier** — attacker-controlled values can no longer turn
+  into Excel formulas; rules are validated on load; installable package
+  with a standalone Windows executable for tagged releases.
 
 ## Install
 
 Requires Python 3.11+.
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/rumenjordanov/ADForensicTool.git
 cd ADForensicTool
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
@@ -163,6 +184,8 @@ Source IPs only link sprays and account-less events, so a shared NAT or jump
 host does not glue unrelated users together, and machine accounts (`DC01$`)
 never link anything. Each chain is tagged with ATT&CK tactics and narrated by
 [`narrator/narrate.py`](adforensictool/narrator/narrate.py).
+
+![Attack Chains tab of the sample report](docs/images/attack-chains.png)
 
 ## Detection rules
 
