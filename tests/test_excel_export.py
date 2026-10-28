@@ -8,12 +8,13 @@ exact colors/fonts -- that's better verified by opening the file manually.
 """
 from __future__ import annotations
 
+import zipfile
 from datetime import UTC, datetime
 
 import pandas as pd
 from openpyxl import load_workbook
 
-from adforensictool.excel_export.report import build_report
+from adforensictool.excel_export.report import DISPLAY_COLUMNS, build_report
 from adforensictool.parser.evtx_parser import normalize_record
 from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
 from tests.fixtures.sample_events import failed_logon_xml, group_membership_change_xml
@@ -82,3 +83,30 @@ def test_build_report_with_no_findings(tmp_path):
     assert "unknown" in summary["G2"].value  # source_file defaults when not given
     # No findings -- no charts should have been built
     assert len(summary._charts) == 0
+
+
+def test_attacker_controlled_text_is_never_written_as_a_formula(tmp_path):
+    """Regression test: usernames are attacker-controlled (anyone can fail a
+    logon as any name), and openpyxl stores strings starting with "=" as
+    live formulas. A hostile account name must land in the report as inert
+    text, unchanged, not as an executable HYPERLINK/DDE formula.
+    """
+    hostile = '=HYPERLINK("http://203.0.113.9/x","click")'
+    rules = load_rules(DEFAULT_RULES_PATH)
+    xml = [failed_logon_xml(f"2026-06-08T02:{10 + i}:00.000000Z", user=hostile) for i in range(5)]
+    df = pd.DataFrame([normalize_record(x) for x in xml])
+    flagged = apply_rules(df, rules)
+    assert len(flagged) == 5
+
+    output_path = tmp_path / "report.xlsx"
+    build_report(df, flagged, rules, str(output_path), source_file="=cmd|'/c calc'!A1.evtx")
+
+    with zipfile.ZipFile(output_path) as zf:
+        sheet_xml = "".join(zf.read(n).decode("utf-8") for n in zf.namelist() if n.startswith("xl/worksheets/"))
+    assert "<f>" not in sheet_xml
+
+    wb = load_workbook(output_path)
+    user_col = DISPLAY_COLUMNS.index("user") + 1
+    cell = wb["Raw Flagged Events"].cell(row=2, column=user_col)
+    assert cell.value == hostile
+    assert cell.data_type == "s"
