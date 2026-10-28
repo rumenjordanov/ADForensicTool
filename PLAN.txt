@@ -188,9 +188,19 @@ STEP 15 Real .evtx fixture + release build   (done)
   [-] PyPI publishing: skipped -- needs the owner's PyPI account / trusted
       publisher set up.
 
-STEP 16 Docs + sample report
-  [ ] Regenerate examples/sample_report.xlsx covering the new detections and
-      chains; update README (usage, rule schema, roadmap).
+STEP 16 Docs + sample report   (done)
+  [x] examples/generate_sample_report.py: fictional 3-chain intrusion (16 of
+      16 rules fire); writes sample_report.xlsx + sample_report.json.
+      Rendered through Excel and checked visually. Found + fixed:
+      (a) "Findings by Rule" with 16 rules dropped every other label -> top 8,
+      largest on top; (b) axis titles on the wrong axis of horizontal bar
+      charts; (c) spray chain headline listed "abaker, bcole, cdiaz and 8
+      more" instead of the compromised account -> Chain.key_accounts ranks
+      accounts by stage involvement (+ regression test).
+  [x] README rewritten: usage table, detections table, log-integrity
+      features, chains, rule schema, Sigma, allowlist, rust backend (+
+      Windows caveat; install steps verified verbatim in a fresh venv),
+      architecture, roadmap. Quoted narrative verified to match the sample.
 
 STEP 17 Push
   [ ] Push `improvements` branch to GitHub.

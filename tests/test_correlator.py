@@ -98,6 +98,18 @@ def test_password_spray_links_to_the_account_that_then_logged_on(rules):
     assert [s.rule_id for s in chain.stages] == ["password_spray", "logon_after_brute_force"]
 
 
+def test_key_accounts_put_the_compromised_account_ahead_of_sprayed_ones(rules):
+    """Regression test: the spray chain's headline listed 'abaker, bcole,
+    cdiaz and 8 more' instead of the account that was actually taken over."""
+    xml = [failed_logon_xml(_ts(i), user=f"user{i}", ip="198.51.100.7") for i in range(8)]
+    xml.append(successful_logon_xml(_ts(20), user="user3"))
+    xml.append(account_created_xml(_ts(25), new_account="backdoor", performed_by="user3"))
+    xml.append(group_membership_change_xml(_ts(26), member="backdoor", performed_by="user3"))
+    (chain,) = _chains(rules, xml)
+    assert chain.key_accounts == ["user3", "backdoor"]
+    assert len(chain.users) == 9  # the full list is still available
+
+
 def test_shared_source_ip_alone_does_not_link_different_accounts(rules):
     """Two unrelated single-account detections from the same address (a
     jump host, NAT) must not be glued together."""

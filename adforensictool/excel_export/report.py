@@ -85,6 +85,7 @@ OPTIONAL_DISPLAY_COLUMNS = ["source_file"]  # shown only when present (multi-fil
 
 DASHBOARD_LAST_COL = 12  # column L -- width of the banner/KPI/bullet area
 MAX_NARRATED_CHAINS = 10  # on the Executive Summary; the rest are on the Attack Chains tab
+TOP_RULES_IN_CHART = 8
 DATETIME_FORMAT = "yyyy-mm-dd hh:mm:ss"
 
 
@@ -367,9 +368,15 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
     # -- Findings-by-rule staging table (columns Q:R), hidden from view --
     # Keep each rule's severity alongside its name/count so its bar can be
     # colored the same way (one rule always has exactly one severity).
+    # Only the top rules fit legibly in the chart (with more, Excel silently
+    # drops every other category label); the full list is under KEY FINDINGS.
+    # Horizontal bar charts draw the first category at the bottom, so sort
+    # ascending to put the largest bar on top.
     by_rule = (
-        flagged.groupby(["rule_name", "severity"]).size().reset_index(name="count").sort_values("count", ascending=False)
-    )
+        flagged.groupby(["rule_name", "severity"]).size().reset_index(name="count")
+        .sort_values("count", ascending=False, kind="stable").head(TOP_RULES_IN_CHART)
+        .iloc[::-1]
+    )  # fmt: skip
 
     ws["Q1"] = "Rule"
     ws["R1"] = "Count"
@@ -379,8 +386,8 @@ def _build_charts(ws: Worksheet, flagged: pd.DataFrame) -> int:
 
     rule_chart = BarChart()
     rule_chart.type = "bar"  # horizontal bars read better with long rule names
-    rule_chart.title = "Findings by Rule"
-    rule_chart.x_axis.title = "Events"
+    rule_chart.title = "Findings by Rule" if len(by_rule) < TOP_RULES_IN_CHART else f"Top {TOP_RULES_IN_CHART} Rules by Findings"
+    rule_chart.y_axis.title = "Events"  # in a horizontal bar chart x_axis is the category (rule name) axis
     rule_chart.height = 8
     rule_chart.width = 14
     data = Reference(ws, min_col=18, min_row=1, max_row=1 + len(by_rule))
@@ -675,7 +682,7 @@ def _build_mitre_coverage(ws: Worksheet, flagged: pd.DataFrame, rules: list[Rule
         chart.type = "bar"
         chart.style = 10
         chart.title = "MITRE ATT&CK Technique Coverage"
-        chart.x_axis.title = "Events Observed"
+        chart.y_axis.title = "Events Observed"  # value axis (horizontal bars)
         chart.height = max(6, len(rows) * 1.1)
         chart.width = 16
         data = Reference(ws, min_col=3, min_row=1, max_row=last_row)

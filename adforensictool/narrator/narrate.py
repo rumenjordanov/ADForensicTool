@@ -289,5 +289,5 @@ def chain_headline(chain: Chain, arrow: str = "→") -> str:
 
     Pass arrow="->" for consoles whose code page lacks "→".
     """
-    who = _names(chain.users) if chain.users else _names(chain.source_ips)
+    who = _names(chain.key_accounts) if chain.users else _names(chain.source_ips)
     return f"{f' {arrow} '.join(chain.tactics)} ({who})"
