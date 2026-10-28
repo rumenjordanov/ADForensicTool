@@ -95,9 +95,15 @@ STEP 9  Correlator   (done)
       fail without the fix.
   [x] Perf: 16k findings took 15s (per-stage DataFrames) -> 0.5s.
 
-STEP 10 Narrator
-  [ ] Templates per stage type + generic fallback; handles partial chains.
-  [ ] Tests.
+STEP 10 Narrator   (done)
+  [x] Phrase builder per rule + generic fallback; works per stage so
+      partial / unanticipated sequences narrate too (answer to the open
+      question). Consecutive same-rule stages merged; an event flagged by
+      two rules described once under the more severe one. Timezone aware;
+      multi-day chains show dates. chain_headline() gives a short title.
+  [x] Tests (10), including the exact sentence from the project spec.
+      Caught while testing: multi-day prefix rendered as
+      "2026-06-08 06-08 23:50-06-09 00:20" -> now "... 23:50 to 2026-06-09 00:20".
 
 STEP 11 Report integration
   [ ] Attack Chains tab renders real chains (+ per-rule detection groups
