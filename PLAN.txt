@@ -58,14 +58,20 @@ STEP 6  New rule capabilities   (done)
   [x] New `followed_by` rule type (after, within_minutes, join_on), rules
       auto-ordered so dependencies run first.
 
-STEP 7  New detections (YAML)
-  [ ] password spraying, successful logon after brute force, AS-REP
+STEP 7  New detections (YAML)   (done)
+  [x] password spraying, successful logon after brute force, AS-REP
       roasting (4768 PreAuthType 0), DCSync (4662 replication GUIDs by a
       non-machine account), account created (4720), scheduled task (4698),
-      service installed (4697 / 7045), audit policy changed (4719), DSRM
-      password set (4794), account lockout (4740), pass-the-hash style logon
-      (4624 LogonType 9 seclogo), persistence after suspicious logon.
-  [ ] MITRE names for all referenced techniques. Tests for each.
+      service installed (4697 / 7045), audit policy weakened (4719 removals
+      only), DSRM password set (4794), account lockout (4740), pass-the-hash
+      style logon (4624 LogonType 9 seclogo), persistence after suspicious
+      logon (followed_by with new join_on_later: logon user -> subject_user).
+  [x] MITRE names for all referenced techniques. Tests for each (+/-).
+  [x] Found: Kerberos events log IPs as ::ffff:a.b.c.d, NTLM as a.b.c.d ->
+      spraying across both protocols was split. Normalized in the parser.
+  [x] Found via 200k-event perf probe: pd.to_datetime per record was 87% of
+      parse time. fromisoformat fast path: 64s -> 9.4s, identical results.
+      python-evtx's datetime.min (year 1) "no time" marker -> NaT.
 
 STEP 8  Allowlist
   [ ] `--allowlist file.yaml`: suppress flagged events by field conditions,

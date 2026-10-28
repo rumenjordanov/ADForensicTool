@@ -240,6 +240,7 @@ class Rule:
     after: list[str] = dc_field(default_factory=list)
     within_minutes: float | None = None
     join_on: list[str] = dc_field(default_factory=lambda: ["user"])
+    join_on_later: list[str] = dc_field(default_factory=list)  # defaults to join_on
 
     def __post_init__(self) -> None:
         if self.type not in VALID_TYPES:
@@ -268,7 +269,7 @@ class Rule:
 _RULE_KEYS = {
     "id", "name", "severity", "mitre_technique", "type", "event_ids", "description", "match", "exclude",
     "group_by", "window_minutes", "min_count", "distinct_field", "min_distinct",
-    "field", "equals", "after", "within_minutes", "join_on",
+    "field", "equals", "after", "within_minutes", "join_on", "join_on_later",
 }  # fmt: skip
 _REQUIRED_KEYS = ("id", "name", "severity", "mitre_technique", "type", "event_ids")
 
@@ -294,7 +295,7 @@ def rule_from_dict(raw: Any, index: int = 0) -> Rule:
         kwargs["equals"] = [kwargs["equals"]]
     kwargs["match"] = [_parse_condition(c, rule_id) for c in raw.get("match") or []]
     kwargs["exclude"] = _parse_exclude(raw.get("exclude") or [], rule_id)
-    for list_key in ("after", "join_on"):
+    for list_key in ("after", "join_on", "join_on_later"):
         if list_key in kwargs and isinstance(kwargs[list_key], str):
             kwargs[list_key] = [kwargs[list_key]]
     return Rule(**kwargs)
@@ -436,13 +437,15 @@ def _join_keys(row: pd.Series, columns: list[str]) -> set[str]:
     for col in columns:
         key = actor_key(_field_value(row, col))
         if key:
-            keys.add(f"{col}:{key}")
+            keys.add(key)
     return keys
 
 
 def _apply_followed_by(df: pd.DataFrame, rule: Rule, flagged: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Flag candidate events within within_minutes AFTER an event flagged by
-    any of rule.after, sharing a join_on value (e.g. the same user)."""
+    any of rule.after, for the same actor: some join_on value of the earlier
+    event equals some join_on_later value of the later one (e.g. the user
+    who logged on == the subject_user who then created an account)."""
     priors = [flagged[r] for r in rule.after if r in flagged and not flagged[r].empty]
     subset = _candidates(df, rule)
     if subset.empty or not priors:
@@ -460,11 +463,13 @@ def _apply_followed_by(df: pd.DataFrame, rule: Rule, flagged: dict[str, pd.DataF
 
     window = timedelta(minutes=rule.within_minutes)
 
+    later_columns = rule.join_on_later or rule.join_on
+
     def follows(row: pd.Series) -> bool:
         ts = row["timestamp"]
         if pd.isna(ts):
             return False
-        for key in _join_keys(row, rule.join_on):
+        for key in _join_keys(row, later_columns):
             times = prior_times.get(key)
             if not times:
                 continue

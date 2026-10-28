@@ -44,12 +44,19 @@ SEVERITY_SCORE = {"critical": 40, "high": 20, "medium": 10, "low": 5}
 # reference. Extend when you add rules that cite new technique IDs.
 MITRE_NAMES = {
     "T1110": "Brute Force",
+    "T1110.003": "Brute Force: Password Spraying",
     "T1078": "Valid Accounts",
     "T1098": "Account Manipulation",
     "T1070.001": "Clear Windows Event Logs",
     "T1558.003": "Steal or Forge Kerberos Tickets: Kerberoasting",
+    "T1558.004": "Steal or Forge Kerberos Tickets: AS-REP Roasting",
+    "T1003.006": "OS Credential Dumping: DCSync",
+    "T1550.002": "Use Alternate Authentication Material: Pass the Hash",
+    "T1136.002": "Create Account: Domain Account",
     "T1543": "Create or Modify System Process",
+    "T1543.003": "Create or Modify System Process: Windows Service",
     "T1053.005": "Scheduled Task/Job: Scheduled Task",
+    "T1562.002": "Impair Defenses: Disable Windows Event Logging",
 }
 
 DISPLAY_COLUMNS = [

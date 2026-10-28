@@ -35,8 +35,9 @@
 # type: followed_by -- flags a matching event that occurs within
 #   within_minutes AFTER an event flagged by one of the `after` rules, for
 #   the same actor. extra fields: after (rule id or list), within_minutes,
-#   join_on (column or list of columns compared between the two events,
-#   default: user).
+#   join_on (column or list of columns of the earlier event, default: user),
+#   join_on_later (columns of the later event compared against them;
+#   default: same as join_on).
 
 rules:
   - id: brute_force
@@ -93,10 +94,151 @@ rules:
       - field: TargetUserName  # machine accounts requesting tickets
         regex: ['^[^@]*\$(@|$)']
 
-  # The two rules below describe multi-event-ID sequences (a logon following
-  # a brute-force cluster; a service/task created shortly after a suspicious
-  # logon). They are intentionally NOT expressible by the generic engine
-  # above, which only ever looks at one rule's own event stream in
-  # isolation. Stitching flagged events from *different* rules together
-  # into a single narrative is exactly what correlator/chain_builder.py is
-  # for -- see the TODOs there.
+  - id: password_spray
+    name: "Password Spraying"
+    description: >
+      One source address failing logons against many different accounts in
+      a short window: a few guesses per account, so it stays under both the
+      lockout policy and the per-user brute_force threshold above.
+    severity: high
+    mitre_technique: T1110.003
+    type: threshold
+    event_ids: [4625, 4771]
+    group_by: source_ip
+    window_minutes: 30
+    distinct_field: user
+    min_distinct: 8
+
+  - id: account_lockout
+    name: "Account Locked Out"
+    description: Supporting evidence for brute force / spraying; routine on its own.
+    severity: low
+    mitre_technique: T1110
+    type: always_flag
+    event_ids: [4740]
+
+  - id: logon_after_brute_force
+    name: "Successful Logon After Brute Force"
+    description: >
+      The account that was just brute-forced or sprayed logged on
+      successfully: the guessing very likely worked.
+    severity: critical
+    mitre_technique: T1078
+    type: followed_by
+    event_ids: [4624]
+    after: [brute_force, password_spray]
+    within_minutes: 60
+    join_on: user
+    exclude:
+      - field: user
+        endswith: ["$"]
+
+  - id: pass_the_hash
+    name: "Pass-the-Hash / Overpass-the-Hash Style Logon"
+    description: >
+      LogonType 9 (NewCredentials) through the seclogo logon process is what
+      runas /netonly -- and Mimikatz sekurlsa::pth -- produce: a process
+      starts using alternate credentials for network access only.
+    severity: high
+    mitre_technique: T1550.002
+    type: field_match
+    event_ids: [4624]
+    match:
+      - field: logon_type
+        equals: "9"
+      - field: LogonProcessName
+        contains: seclogo
+
+  - id: asrep_roasting
+    name: "AS-REP Roasting (TGT Without Pre-Authentication)"
+    description: >
+      A TGT was issued for an account with Kerberos pre-authentication
+      disabled; its encrypted part can be cracked offline.
+    severity: high
+    mitre_technique: T1558.004
+    type: field_match
+    event_ids: [4768]
+    match:
+      - field: PreAuthType
+        equals: "0"
+      - field: Status
+        equals: "0x0"
+
+  - id: dcsync
+    name: "DCSync (Directory Replication by Non-DC Account)"
+    description: >
+      Directory replication rights (DS-Replication-Get-Changes[-All /
+      -In-Filtered-Set]) exercised by an account that is not a domain
+      controller: how Mimikatz lsadump::dcsync pulls password hashes.
+      Legitimate exceptions (e.g. Azure AD Connect's MSOL_ account) belong
+      in an allowlist.
+    severity: critical
+    mitre_technique: T1003.006
+    type: field_match
+    event_ids: [4662]
+    match:
+      - field: Properties
+        contains:
+          - "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"
+          - "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"
+          - "89e95b76-444d-4c62-991a-0facbeda640c"
+    exclude:
+      - field: subject_user
+        endswith: ["$"]   # domain controllers replicate as their machine account
+
+  - id: account_created
+    name: "User Account Created"
+    severity: medium
+    mitre_technique: T1136.002
+    type: always_flag
+    event_ids: [4720]
+
+  - id: scheduled_task_created
+    name: "Scheduled Task Created"
+    severity: medium
+    mitre_technique: T1053.005
+    type: always_flag
+    event_ids: [4698]
+
+  - id: service_installed
+    name: "Service Installed"
+    description: 4697 is the Security-log record; 7045 the System-log one (when a System.evtx is supplied).
+    severity: medium
+    mitre_technique: T1543.003
+    type: always_flag
+    event_ids: [4697, 7045]
+
+  - id: persistence_after_suspicious_logon
+    name: "Persistence Created After Suspicious Logon"
+    description: >
+      A service, scheduled task or new account created by an account shortly
+      after that account's suspicious logon.
+    severity: critical
+    mitre_technique: T1543
+    type: followed_by
+    event_ids: [4697, 4698, 4720]
+    after: [logon_after_brute_force, pass_the_hash]
+    within_minutes: 120
+    join_on: user
+    join_on_later: subject_user
+
+  - id: audit_policy_changed
+    name: "Audit Policy Weakened"
+    description: >
+      Success or failure auditing removed for a category (AuditPolicyChanges
+      %%8448 / %%8450). Additions are routine Group Policy refreshes.
+    severity: high
+    mitre_technique: T1562.002
+    type: field_match
+    event_ids: [4719]
+    match:
+      - field: AuditPolicyChanges
+        contains: ["%%8448", "%%8450"]
+
+  - id: dsrm_password_set
+    name: "DSRM Administrator Password Set"
+    description: The Directory Services Restore Mode password is a known DC persistence backdoor.
+    severity: high
+    mitre_technique: T1098
+    type: always_flag
+    event_ids: [4794]
