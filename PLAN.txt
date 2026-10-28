@@ -174,12 +174,19 @@ STEP 14 Sigma import (subset)   (done)
       equal severity was narrated twice -> tie-break fixed (+ regression
       test verified to fail without the fix).
 
-STEP 15 Real .evtx fixture + release build
-  [ ] Commit a tiny real (empty, no personal data) .evtx so the binary
-      reader path is tested in CI.
-  [ ] GitHub Actions workflow that builds a standalone Windows .exe with
-      PyInstaller on version tags (no PyPI publishing - needs the owner's
-      PyPI account set up).
+STEP 15 Real .evtx fixture + release build   (done)
+  [x] tests/fixtures/empty.evtx committed in step 12; .gitattributes marks
+      *.evtx / *.xlsx binary.
+  [x] .github/workflows/release.yml: on v* tags builds a one-file Windows
+      exe with PyInstaller, checks tag == version, smoke-tests it, attaches
+      it to the GitHub release. Recipe verified locally first (30 MB exe,
+      ran from outside the repo on real .evtx files with --sigma and
+      --timezone: bundled rules + tzdata resolve).
+  [x] CI now also pip-installs the package and runs the installed command
+      outside the checkout (catches missing package data / entry point);
+      reproduced locally in a fresh venv.
+  [-] PyPI publishing: skipped -- needs the owner's PyPI account / trusted
+      publisher set up.
 
 STEP 16 Docs + sample report
   [ ] Regenerate examples/sample_report.xlsx covering the new detections and
