@@ -11,12 +11,14 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
 from adforensictool import console
 from adforensictool.correlator.chain_builder import build_chains
 from adforensictool.excel_export.report import build_report
+from adforensictool.exporters import FORMATS, infer_formats, output_paths, write_csv, write_json, write_timeline
 from adforensictool.narrator.narrate import chain_headline, narrate_chain
 from adforensictool.parser.evtx_parser import BACKENDS, ParseStats, find_evtx_files, parse_evtx_files, resolve_backend
 from adforensictool.rules.allowlist import AllowEntry, apply_allowlist, load_allowlist, unknown_rule_references
@@ -36,6 +38,21 @@ def _positive_float(text: str) -> float:
     return value
 
 
+def _format_list(text: str) -> list[str]:
+    formats = [f.strip().lower() for f in text.split(",") if f.strip()]
+    unknown = [f for f in formats if f not in FORMATS]
+    if unknown or not formats:
+        raise argparse.ArgumentTypeError(f"unknown format(s) {', '.join(unknown) or '(none)'}; choose from {', '.join(FORMATS)}")
+    return list(dict.fromkeys(formats))
+
+
+def _timezone(text: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(text)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise argparse.ArgumentTypeError(f"unknown timezone {text!r} (use an IANA name such as Europe/Sofia or UTC)") from None
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="ADForensicTool",
@@ -49,7 +66,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="One or more .evtx files and/or directories (searched recursively), e.g. exports from several DCs "
         "plus their System.evtx",
     )
-    parser.add_argument("--output", required=True, help="Path to write the .xlsx report to")
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Report path. Its extension picks the format unless --format is given "
+        "(.xlsx, .json, .csv, .timeline.csv); with several formats, each is written next to it",
+    )
+    parser.add_argument(
+        "--format",
+        type=_format_list,
+        metavar="FMT[,FMT...]",
+        help=f"Output format(s), comma-separated: {', '.join(FORMATS)}. timeline = Timesketch-importable CSV",
+    )
+    parser.add_argument(
+        "--timezone",
+        type=_timezone,
+        metavar="IANA_NAME",
+        help="Show event times in this timezone, e.g. Europe/Sofia or America/New_York (default: UTC)",
+    )
     parser.add_argument(
         "--rules",
         default=str(DEFAULT_RULES_PATH),
@@ -189,22 +223,39 @@ def _run(args: argparse.Namespace) -> int:
         console.warn(f"{len(chains)} attack chain(s) identified:")
         for chain in chains:
             console.detail(f"[{chain.severity.upper()}] {chain.id}: {chain_headline(chain, arrow='->')}")
-            console.detail(f"  {narrate_chain(chain)}")
+            console.detail(f"  {narrate_chain(chain, args.timezone)}")
     else:
         console.success("No multi-stage attack chains identified")
 
-    console.info(f"Writing report to {args.output} ...")
-    build_report(
-        df,
-        flagged,
-        rules,
-        args.output,
-        source_file=describe_sources(input_paths),
-        parse_stats=stats,
-        suppressed=suppressed,
-        chains=chains,
-    )
-    console.success(f"Report written to {args.output}")
+    for fmt, path in output_paths(args.output, args.format or infer_formats(args.output)).items():
+        console.info(f"Writing {fmt} output to {path} ...")
+        if fmt == "xlsx":
+            build_report(
+                df,
+                flagged,
+                rules,
+                str(path),
+                source_file=describe_sources(input_paths),
+                parse_stats=stats,
+                suppressed=suppressed,
+                chains=chains,
+                tz=args.timezone,
+            )
+        elif fmt == "json":
+            write_json(
+                path,
+                flagged,
+                chains,
+                sources=[str(p) for p in input_paths],
+                parse_stats=stats,
+                suppressed=suppressed,
+                tz=args.timezone,
+            )
+        elif fmt == "csv":
+            write_csv(path, flagged, chains, args.timezone)
+        else:
+            write_timeline(path, flagged, chains)
+        console.success(f"Wrote {path}")
     return 0
 
 
