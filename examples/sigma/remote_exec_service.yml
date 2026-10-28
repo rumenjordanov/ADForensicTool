@@ -1,0 +1,23 @@
+title: Remote Execution Tool Service Installed
+id: 3e9b2d10-8f4c-4c6e-a1b7-0d5e6f7a8b92
+status: experimental
+description: >
+  A service named after a well-known remote execution tool (PsExec and its
+  clones) was installed. Example rule for ADForensicTool's --sigma option.
+author: ADForensicTool examples
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4697
+    ServiceName|startswith:
+      - PSEXESVC
+      - csexecsvc
+      - RemComSvc
+      - PAExec
+  condition: selection
+level: high
+tags:
+  - attack.execution
+  - attack.t1569.002

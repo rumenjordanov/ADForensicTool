@@ -1,0 +1,23 @@
+title: Remote Execution Tool Service Installed (System Log)
+id: 5a0c7e93-1d2f-4b8a-9c6d-2e3f4a5b6c7d
+status: experimental
+description: >
+  System-log (7045) counterpart of remote_exec_service.yml, for when a
+  System.evtx is passed alongside Security.evtx.
+author: ADForensicTool examples
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID: 7045
+    ServiceName|startswith:
+      - PSEXESVC
+      - csexecsvc
+      - RemComSvc
+      - PAExec
+  condition: selection
+level: high
+tags:
+  - attack.execution
+  - attack.t1569.002

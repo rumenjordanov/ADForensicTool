@@ -209,19 +209,32 @@ def _event_keys(stage: ChainStage) -> frozenset:
 
 
 def _narratable_stages(chain: Chain) -> list[ChainStage]:
-    """Drop stages whose events are all described by a more severe stage."""
-    keyed = [(stage, _event_keys(stage)) for stage in chain.stages]
+    """Drop stages whose events are all described by a better stage: a more
+    severe one, an equally severe one covering more events, or -- for the
+    exact same events, e.g. a built-in rule and an imported Sigma rule both
+    flagging one ticket request -- the one with a dedicated phrase (then the
+    earlier one)."""
+    keyed = [(i, stage, _event_keys(stage)) for i, stage in enumerate(chain.stages)]
+
+    def preferred(a: tuple, b: tuple) -> bool:
+        """Is stage a preferred over stage b for the same events?"""
+        (ia, sa, _), (ib, sb, _) = a, b
+        return ((sa.rule_id in PHRASES), -ia) > ((sb.rule_id in PHRASES), -ib)
+
     keep = []
-    for stage, keys in keyed:
-        covered = any(
-            other is not stage
-            and keys <= other_keys
-            and (
-                SEVERITY_RANK.get(other.severity, -1) > SEVERITY_RANK.get(stage.severity, -1)
-                or (other.severity == stage.severity and keys < other_keys)
-            )
-            for other, other_keys in keyed
-        )
+    for entry in keyed:
+        _, stage, keys = entry
+        covered = False
+        for other in keyed:
+            _, other_stage, other_keys = other
+            if other_stage is stage or not keys <= other_keys:
+                continue
+            rank, other_rank = SEVERITY_RANK.get(stage.severity, -1), SEVERITY_RANK.get(other_stage.severity, -1)
+            if other_rank > rank or (
+                other_rank == rank and (keys < other_keys or (keys == other_keys and preferred(other, entry)))
+            ):
+                covered = True
+                break
         if not covered:
             keep.append(stage)
     return keep

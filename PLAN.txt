@@ -161,11 +161,18 @@ STEP 13 Output formats + timezone   (done)
   [x] `--timezone` (IANA name) for all displayed times (report, console,
       CSV, JSON); tzdata declared for Windows.
 
-STEP 14 Sigma import (subset)
-  [ ] `--sigma` file/dir: convert simple Windows Security Sigma rules
-      (selection [+ "and not" filter], field modifiers contains/startswith/
-      endswith, EventID, level, attack tags) into engine rules; unsupported
-      rules skipped with a warning.
+STEP 14 Sigma import (subset)   (done)
+  [x] `--sigma` files/dirs: windows security/system rules; field maps with
+      list=OR, modifiers contains/startswith/endswith/re (+|all), * and ?
+      wildcards; conditions `sel`, `not sel`, `all of x*`, `not 1 of x*`,
+      `not (a or b)` joined by "and"; level/tags mapped. Everything else is
+      skipped WITH a reason (e.g. SigmaHQ's own kerberoasting rule uses a
+      list-of-maps filter -> rejected rather than approximated).
+  [x] examples/sigma/: 3 original example rules (not copied from SigmaHQ,
+      whose rules carry the DRL license), verified to convert and fire.
+  [x] Found in E2E: event flagged by both a built-in and a Sigma rule of
+      equal severity was narrated twice -> tie-break fixed (+ regression
+      test verified to fail without the fix).
 
 STEP 15 Real .evtx fixture + release build
   [ ] Commit a tiny real (empty, no personal data) .evtx so the binary
