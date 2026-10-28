@@ -530,5 +530,5 @@ def apply_rules(df: pd.DataFrame, rules: list[Rule]) -> pd.DataFrame:
     if not results:
         return pd.DataFrame(columns=list(df.columns) + FLAG_COLUMNS)
     combined = pd.concat(results, ignore_index=True)
-    combined.sort_values("timestamp", kind="stable", inplace=True, ignore_index=True)
+    combined = combined.sort_values("timestamp", kind="stable", ignore_index=True)
     return combined

@@ -105,7 +105,8 @@ def test_csv_escapes_hostile_values_and_uses_display_timezone(tmp_path, results)
     write_csv(path, flagged, chains, ZoneInfo("Europe/Sofia"))
     raw = path.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")  # BOM so Excel reads UTF-8
-    rows = list(csv.DictReader(path.open(encoding="utf-8-sig")))
+    with path.open(encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
     assert len(rows) == len(flagged)
     assert rows[0]["timestamp (Europe/Sofia)"] == "2026-06-08T05:10:00+03:00"
     assert rows[0]["chain_id"] == "chain-1"
@@ -117,7 +118,8 @@ def test_timeline_is_timesketch_shaped_and_utc(tmp_path, results):
     flagged, chains = results
     path = tmp_path / "r.timeline.csv"
     write_timeline(path, flagged, chains)
-    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    with path.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
     assert list(rows[0])[:3] == ["message", "datetime", "timestamp_desc"]
     assert rows[0]["datetime"] == "2026-06-08T02:10:00+00:00"
     assert rows[0]["message"] == "[HIGH] Brute Force Login Attempts (event 4625) -- jsmith from 203.0.113.44"

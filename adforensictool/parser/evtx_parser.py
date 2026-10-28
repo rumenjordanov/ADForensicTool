@@ -457,7 +457,7 @@ def parse_evtx(
         return empty_events_frame()
 
     df = pd.DataFrame(rows)
-    df.sort_values("timestamp", inplace=True, ignore_index=True)
+    df = df.sort_values("timestamp", ignore_index=True)
     return df
 
 
@@ -513,5 +513,5 @@ def parse_evtx_files(
         dupes = df[keyed].duplicated(subset=["channel", "target_host", "record_id"], keep="first")
         stats.records_duplicate += int(dupes.sum())
         df = df.drop(index=dupes[dupes].index)
-    df.sort_values("timestamp", kind="stable", inplace=True, ignore_index=True)
+    df = df.sort_values("timestamp", kind="stable", ignore_index=True)
     return df

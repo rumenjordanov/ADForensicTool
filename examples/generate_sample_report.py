@@ -109,7 +109,7 @@ def build_sample_events() -> list[str]:
 def main() -> None:
     xml_events = build_sample_events()
     df = pd.DataFrame([normalize_record(x) for x in xml_events])
-    df.sort_values("timestamp", inplace=True, ignore_index=True)
+    df = df.sort_values("timestamp", ignore_index=True)
 
     rules = load_rules(RULES_PATH)
     flagged = apply_rules(df, rules)
