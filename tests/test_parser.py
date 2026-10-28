@@ -156,7 +156,7 @@ def test_parse_evtx_sorts_by_timestamp_and_skips_bad_records(monkeypatch):
         "<not-valid-xml",
         failed_logon_xml("2026-06-08T02:14:00.000000Z"),
     ]
-    monkeypatch.setattr(evtx_parser, "_iter_record_xml", lambda path: iter(xml_records))
+    monkeypatch.setattr(evtx_parser, "_iter_record_xml", lambda path, backend="python": iter(xml_records))
 
     stats = evtx_parser.ParseStats()
     df = evtx_parser.parse_evtx("unused-path.evtx", stats=stats)
@@ -169,7 +169,7 @@ def test_parse_evtx_sorts_by_timestamp_and_skips_bad_records(monkeypatch):
 
 
 def test_parse_evtx_empty_returns_empty_dataframe_with_expected_columns(monkeypatch):
-    monkeypatch.setattr(evtx_parser, "_iter_record_xml", lambda path: iter([]))
+    monkeypatch.setattr(evtx_parser, "_iter_record_xml", lambda path, backend="python": iter([]))
 
     df = evtx_parser.parse_evtx("unused-path.evtx")
 

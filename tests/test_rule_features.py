@@ -47,6 +47,7 @@ def _rule(**overrides) -> dict:
         (_rule(match=[{"field": "user", "regex": "("}]), "invalid regex"),
         (_rule(type="followed_by", after="r2"), "followed_by rules require"),
         (_rule(type="followed_by", after="missing", within_minutes=5), "unknown rule 'missing'"),
+        (_rule(channels=[]), "channels must be"),
     ],
 )
 def test_invalid_rules_raise_clear_errors(raw, message):

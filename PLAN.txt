@@ -122,13 +122,31 @@ STEP 11 Report integration   (done)
       Regression tests for (a) and (d), verified to fail without the fix.
   [ ] (moved to step 12) banner source path overflows when long.
 
-STEP 12 Input: multiple files / folders, faster parsing
-  [ ] `--input` accepts several files and/or directories (recursive *.evtx).
-      `source_file` column added so events stay traceable.
-  [ ] Event-ID prefilter: only fully parse records whose EventID some rule
-      references (cheap regex before XML parsing).
-  [ ] Optional fast backend: use the Rust-based `evtx` package when
-      installed (`--backend auto|python|rust`), python-evtx otherwise.
+STEP 12 Input: multiple files / folders, faster parsing   (done)
+  [x] `--input` accepts several files and/or directories (recursive *.evtx).
+      `source_file` column; overlapping exports de-duplicated on
+      channel + computer + EventRecordID (new record_id / channel columns).
+  [x] Event-ID prefilter (cheap regex before XML parsing); --all-events
+      turns it off. KPI now shows log records read.
+  [x] `--backend auto|python|rust` (pyevtx-rs when importable).
+      FOUND: pyevtx-rs ("evtx") and python-evtx ("Evtx") cannot coexist on
+      Windows -- same directory on a case-insensitive FS; installing one
+      breaks the other. So no pip extra; README documents a separate venv.
+      Real-file comparison: identical normalized output except 1us float
+      rounding; rust ~45x faster (22.7s -> 1.05s end to end).
+  [x] FOUND (real corrupted .evtx): one bad record aborted the WHOLE parse
+      (all 3458 good events lost). Now read chunk by chunk; losses counted
+      exactly from chunk headers (3387 recovered, 71 lost).
+  [x] NEW: EventRecordID gap analysis per file/channel/computer (deleted-
+      record anti-forensics indicator; caught the 86 records the rust
+      backend could not count). Shown in CLI + Executive Summary.
+  [x] FOUND: Application log has unrelated Event ID 4625s (EventSystem
+      provider); with directory input that means false positives (e.g. any
+      app's 1102 = "audit log cleared"). Rules now have `channels`
+      (default Security). Regression test verified.
+  [x] Real-binary fixture tests/fixtures/empty.evtx (export matching no
+      events; verified to contain no identifying data). Banner shows file
+      names, not full paths (fixes overflow noted in step 11).
 
 STEP 13 Output formats + timezone
   [ ] `--format xlsx,json,csv,timeline` (timeline = Timesketch-compatible CSV).

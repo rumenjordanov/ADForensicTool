@@ -18,7 +18,7 @@ from adforensictool import console
 from adforensictool.correlator.chain_builder import build_chains
 from adforensictool.excel_export.report import build_report
 from adforensictool.narrator.narrate import chain_headline, narrate_chain
-from adforensictool.parser.evtx_parser import ParseStats, parse_evtx
+from adforensictool.parser.evtx_parser import BACKENDS, ParseStats, find_evtx_files, parse_evtx_files, resolve_backend
 from adforensictool.rules.allowlist import AllowEntry, apply_allowlist, load_allowlist, unknown_rule_references
 from adforensictool.rules.engine import DEFAULT_RULES_PATH, RuleError, apply_rules, load_rules
 from adforensictool.version import __version__
@@ -39,9 +39,16 @@ def _positive_float(text: str) -> float:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="ADForensicTool",
-        description="Reconstruct an attack narrative from a Security.evtx export.",
+        description="Reconstruct an attack narrative from Windows Security (.evtx) event log exports.",
     )
-    parser.add_argument("--input", required=True, help="Path to a Security.evtx file")
+    parser.add_argument(
+        "--input",
+        required=True,
+        nargs="+",
+        metavar="PATH",
+        help="One or more .evtx files and/or directories (searched recursively), e.g. exports from several DCs "
+        "plus their System.evtx",
+    )
     parser.add_argument("--output", required=True, help="Path to write the .xlsx report to")
     parser.add_argument(
         "--rules",
@@ -58,6 +65,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=60,
         metavar="MINUTES",
         help="Max gap between two detections for the same account to be linked into one attack chain (default: 60)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default="auto",
+        help="evtx parser: 'rust' (pyevtx-rs, much faster, if installed), 'python' (python-evtx), "
+        "or 'auto' (default: rust when available)",
+    )
+    parser.add_argument(
+        "--all-events",
+        action="store_true",
+        help="Fully parse every record, not just the Event IDs the rules look at (slower; same detections)",
     )
     parser.add_argument(
         "--debug",
@@ -83,10 +102,28 @@ def _load_config(loader: Callable[[Path], T], path: Path, kind: str) -> T | None
     return None
 
 
+def describe_sources(paths: list[Path], limit: int = 3) -> str:
+    """Short provenance line for the report banner: file names, not full
+    paths (those are in the source_file column)."""
+    names = [p.name for p in paths]
+    if len(names) <= limit:
+        return ", ".join(names)
+    return f"{len(names)} files: {', '.join(names[:limit])} +{len(names) - limit} more"
+
+
 def _run(args: argparse.Namespace) -> int:
-    input_path = Path(args.input)
-    if not input_path.is_file():
-        console.error(f"input file not found: {input_path}")
+    try:
+        input_paths = find_evtx_files(args.input)
+    except FileNotFoundError as exc:
+        console.error(str(exc))
+        return 1
+    if not input_paths:
+        console.error(f"no .evtx files found in: {', '.join(args.input)}")
+        return 1
+    try:
+        backend = resolve_backend(args.backend)
+    except ValueError as exc:
+        console.error(str(exc))
         return 1
 
     # Load all configuration before parsing: a typo in a rules/allowlist
@@ -112,19 +149,31 @@ def _run(args: argparse.Namespace) -> int:
         for rule_id in unknown_rule_references(allowlist, {r.id for r in rules}):
             console.warn(f"allowlist refers to unknown rule '{rule_id}' (typo?) -- that scope matches nothing")
 
-    console.info(f"Parsing {input_path} ...")
+    # Only fully parse Event IDs some rule looks at (unless asked otherwise).
+    event_ids = None if args.all_events or not rules else {eid for r in rules for eid in r.event_ids}
+    console.info(f"Parsing {len(input_paths)} file(s) with the {backend} backend ...")
 
-    def _report_progress(count: int) -> None:
-        console.progress(f"Parsing {input_path} ... {count} record(s) processed")
+    def _report_progress(path: Path, count: int) -> None:
+        console.progress(f"Parsing {path.name} ... {count} record(s) processed")
 
     stats = ParseStats()
-    df = parse_evtx(str(input_path), progress_callback=_report_progress, stats=stats)
+    df = parse_evtx_files(input_paths, progress_callback=_report_progress, stats=stats, event_ids=event_ids, backend=backend)
     console.progress_done()
-    console.success(f"Parsed {len(df)} event(s)")
+    console.success(
+        f"Read {stats.records_read} record(s) from {stats.files} file(s); "
+        f"{len(df)} with Event IDs the rules use were parsed in full"
+    )
+    if stats.records_duplicate:
+        console.info(f"  {stats.records_duplicate} duplicate record(s) across overlapping inputs counted once")
     if stats.records_skipped:
         console.warn(
-            f"{stats.records_skipped} of {stats.records_read} record(s) could not be parsed and were skipped "
+            f"{stats.records_skipped} record(s) could not be read or parsed and were skipped "
             "(corrupted export or possible tampering -- verify the source log)"
+        )
+    for file, channel, computer, low, high, missing in stats.record_id_gaps():
+        console.warn(
+            f"{Path(file).name} [{channel or '?'} @ {computer or '?'}]: {missing} EventRecordID(s) missing between "
+            f"{low} and {high} -- expected for a filtered export, otherwise records were lost or deleted"
         )
 
     console.info("Applying detection rules ...")
@@ -150,7 +199,7 @@ def _run(args: argparse.Namespace) -> int:
         flagged,
         rules,
         args.output,
-        source_file=str(input_path),
+        source_file=describe_sources(input_paths),
         parse_stats=stats,
         suppressed=suppressed,
         chains=chains,

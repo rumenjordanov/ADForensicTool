@@ -19,6 +19,7 @@ from tests.fixtures.sample_events import (
     dsrm_password_set_xml,
     failed_logon_xml,
     kerberos_preauth_failed_xml,
+    make_event_xml,
     new_credentials_logon_xml,
     scheduled_task_xml,
     service_installed_xml,
@@ -181,6 +182,19 @@ def test_audit_policy_weakened(rules, changes):
 @pytest.mark.parametrize("changes", ["%%8449", "%%8451"])  # success / failure ADDED: routine GPO refresh
 def test_audit_policy_additions_ignored(rules, changes):
     assert _hits(rules, [audit_policy_changed_xml(_ts(0), changes=changes)], "audit_policy_changed").empty
+
+
+def test_same_event_ids_from_other_logs_do_not_fire(rules):
+    """Regression test: Event IDs are only unique per provider. A real
+    Application.evtx from a test machine contained Microsoft-Windows-
+    EventSystem events with ID 4625; given directory input, any app's event
+    1102 would have been reported as "Security audit log cleared"."""
+    app = {"channel": "Application", "provider": "Microsoft-Windows-EventSystem"}
+    xml = [make_event_xml(4625, _ts(i), data={"TargetUserName": "jsmith"}, **app) for i in range(6)]
+    xml.append(make_event_xml(1102, _ts(10), data={"SubjectUserName": "x"}, **app))
+    xml.append(make_event_xml(7045, _ts(11), data={"ServiceName": "x"}, **app))  # 7045 only counts from System
+    df = pd.DataFrame([normalize_record(x) for x in xml])
+    assert apply_rules(df, rules).empty
 
 
 def test_every_default_rule_mitre_technique_has_a_name(rules):

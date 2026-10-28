@@ -29,6 +29,8 @@ def make_event_xml(
     computer: str = "DC01.contoso.local",
     data: dict[str, str] | None = None,
     user_data: tuple[str, str, dict[str, str]] | None = None,
+    channel: str = "Security",
+    provider: str = "Microsoft-Windows-Security-Auditing",
 ) -> str:
     """Build a synthetic <Event> XML string for the given Event ID.
 
@@ -51,7 +53,7 @@ def make_event_xml(
 
     return f"""<Event xmlns="{_NS}">
   <System>
-    <Provider Name="Microsoft-Windows-Security-Auditing"/>
+    <Provider Name="{provider}"/>
     <EventID>{event_id}</EventID>
     <Version>0</Version>
     <Level>0</Level>
@@ -62,7 +64,7 @@ def make_event_xml(
     <EventRecordID>1</EventRecordID>
     <Correlation/>
     <Execution ProcessID="656" ThreadID="700"/>
-    <Channel>Security</Channel>
+    <Channel>{channel}</Channel>
     <Computer>{computer}</Computer>
     <Security/>
   </System>
@@ -302,6 +304,8 @@ def system_service_installed_xml(timestamp: str, service: str = "PSEXESVC") -> s
     return make_event_xml(
         7045,
         timestamp,
+        channel="System",
+        provider="Service Control Manager",
         data={
             "ServiceName": service,
             "ImagePath": "%SystemRoot%\\PSEXESVC.exe",

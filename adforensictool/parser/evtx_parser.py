@@ -15,8 +15,9 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -80,6 +81,8 @@ REQUIRED_COLUMNS = [
     "logon_type",
     "process_name",
     "raw_message",
+    "record_id",
+    "channel",
 ]
 
 # Placeholder values Windows writes into empty fields. Treated as "absent"
@@ -99,7 +102,39 @@ class ParseStats:
     """
 
     records_read: int = 0
-    records_skipped: int = 0
+    records_skipped: int = 0  # unreadable / unparseable (corruption, tampering)
+    records_filtered: int = 0  # Event IDs no rule looks at, skipped on purpose
+    records_duplicate: int = 0  # same record found in more than one input file
+    files: int = 0
+    # (file, channel, computer) -> [lowest EventRecordID, highest, records seen]
+    record_ranges: dict[tuple[str, str, str], list[int]] = field(default_factory=dict)
+
+    def note_record_id(self, file: str, channel: str, computer: str, record_id: int) -> None:
+        key = (file, channel, computer)
+        rng = self.record_ranges.get(key)
+        if rng is None:
+            self.record_ranges[key] = [record_id, record_id, 1]
+        else:
+            rng[0] = min(rng[0], record_id)
+            rng[1] = max(rng[1], record_id)
+            rng[2] += 1
+
+    def record_id_gaps(self) -> list[tuple[str, str, str, int, int, int]]:
+        """(file, channel, computer, first id, last id, missing count) for
+        every log whose EventRecordIDs are not contiguous.
+
+        Windows numbers records sequentially, so in a complete export a gap
+        means records were lost or deleted -- removing individual records
+        is a known anti-forensics technique that, unlike clearing the log,
+        leaves no 1102. Filtered exports (wevtutil /q, Event Viewer "Save
+        Filtered Log File As") have gaps by design.
+        """
+        gaps = []
+        for (file, channel, computer), (low, high, count) in self.record_ranges.items():
+            missing = (high - low + 1) - count
+            if missing > 0:
+                gaps.append((file, channel, computer, low, high, missing))
+        return gaps
 
 
 def _parse_timestamp(text: str | None) -> pd.Timestamp:
@@ -183,6 +218,11 @@ def normalize_record(xml_string: str) -> dict[str, Any]:
     computer_el = system.find("e:Computer", _NS)
     target_host = computer_el.text if computer_el is not None else None
 
+    record_id_el = system.find("e:EventRecordID", _NS)
+    record_id = int(record_id_el.text) if record_id_el is not None and (record_id_el.text or "").strip().isdigit() else None
+    channel_el = system.find("e:Channel", _NS)
+    channel = channel_el.text if channel_el is not None else None
+
     event_data = _extract_fields(root)
     aliases = {**_FIELD_ALIASES, **_EVENT_FIELD_OVERRIDES.get(event_id, {})}
 
@@ -216,21 +256,138 @@ def normalize_record(xml_string: str) -> dict[str, Any]:
         "logon_type": first_present("logon_type"),
         "process_name": first_present("process_name"),
         "raw_message": "; ".join(f"{k}={v}" for k, v in event_data.items()),
+        "record_id": record_id,
+        "channel": channel,
         "event_data": event_data,
     }
 
 
-def _iter_record_xml(evtx_path: str) -> Iterator[str]:
-    """Yield the XML rendering of every record in a .evtx file.
+# --------------------------------------------------------------------------
+# Reading .evtx files
+# --------------------------------------------------------------------------
 
-    Isolated into its own generator so `parse_evtx` stays a thin wrapper and
-    the python-evtx dependency only shows up here.
+BACKENDS = ("auto", "python", "rust")
+
+# Yielded by the record iterators in place of XML for a record (or a run of
+# records) that could not be read: (number of records lost).
+_Lost = int
+
+_NO_RECORD = 0xFFFFFFFFFFFFFFFF  # chunk header record number meaning "none"
+
+
+def rust_backend_available() -> bool:
+    """True when pyevtx-rs ('evtx') is importable. On Windows it cannot be
+    installed next to python-evtx ('Evtx'): the two package directories
+    collide on a case-insensitive filesystem."""
+    try:
+        from evtx import PyEvtxParser  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def resolve_backend(requested: str = "auto") -> str:
+    if requested not in BACKENDS:
+        raise ValueError(f"unknown backend '{requested}' (choose from {', '.join(BACKENDS)})")
+    if requested == "auto":
+        return "rust" if rust_backend_available() else "python"
+    if requested == "rust" and not rust_backend_available():
+        raise ValueError(
+            "the 'rust' backend needs the pyevtx-rs package (pip install evtx). On Windows it cannot share an "
+            "environment with python-evtx -- see README"
+        )
+    return requested
+
+
+def _iter_python_evtx(evtx_path: str) -> Iterator[str | _Lost]:
+    """python-evtx, read defensively.
+
+    A single corrupted record used to raise out of python-evtx's record
+    generator and abort the entire parse, discarding every valid event --
+    exactly the wrong failure mode for logs that may have been tampered
+    with. Records are now read chunk by chunk: a bad record is skipped, a
+    chunk whose record chain is broken is abandoned after its readable
+    records, and every later chunk is still read. Each chunk header says
+    which record numbers it holds, so the number of records lost is exact.
     """
+    import logging
+
     import Evtx.Evtx as evtx  # python-evtx package, imports as "Evtx"
 
+    logging.getLogger("Evtx").setLevel(logging.ERROR)  # it logs a warning per bad token
+
     with evtx.Evtx(evtx_path) as log:
-        for record in log.records():
-            yield record.xml()
+        chunks = log.chunks()
+        while True:
+            try:
+                chunk = next(chunks)
+            except StopIteration:
+                return
+            except Exception:  # unreadable chunk header: nothing after it can be located
+                yield 1
+                return
+            try:
+                first, last = chunk.log_first_record_number(), chunk.log_last_record_number()
+                if _NO_RECORD in (first, last):
+                    expected = 0  # an empty chunk, e.g. in an export that matched nothing
+                else:
+                    expected = last - first + 1
+                    if not 0 < expected < 100_000:
+                        expected = None  # header itself damaged: don't trust it
+            except Exception:
+                expected = None
+
+            seen = 0
+            records = chunk.records()
+            while True:
+                try:
+                    record = next(records)
+                except StopIteration:
+                    break
+                except Exception:
+                    break  # record chain broken; the remainder is counted below
+                seen += 1
+                try:
+                    yield record.xml()
+                except Exception:
+                    yield 1
+            if expected is not None and seen < expected:
+                yield expected - seen
+
+
+def _iter_rust_evtx(evtx_path: str) -> Iterator[str | _Lost]:
+    """pyevtx-rs: a Rust parser, several times faster than python-evtx. It
+    recovers from corrupt records itself; per-record failures surface as
+    exceptions or error objects, which are counted as lost records."""
+    from evtx import PyEvtxParser
+
+    records = iter(PyEvtxParser(evtx_path).records())
+    while True:
+        try:
+            record = next(records)
+        except StopIteration:
+            return
+        except Exception:
+            yield 1
+            continue
+        if isinstance(record, dict) and isinstance(record.get("data"), str):
+            yield record["data"]
+        else:
+            yield 1
+
+
+def _iter_record_xml(evtx_path: str, backend: str = "python") -> Iterator[str | _Lost]:
+    """Yield the XML rendering of every record in a .evtx file, or an int
+    (number of records lost) where records could not be read."""
+    if backend == "rust":
+        return _iter_rust_evtx(evtx_path)
+    return _iter_python_evtx(evtx_path)
+
+
+_EVENT_ID_RE = re.compile(r"<EventID[^>]*>\s*(\d+)\s*</EventID>")
+_RECORD_ID_RE = re.compile(r"<EventRecordID>\s*(\d+)\s*</EventRecordID>")
+_CHANNEL_RE = re.compile(r"<Channel>([^<]*)</Channel>")
+_COMPUTER_RE = re.compile(r"<Computer>([^<]*)</Computer>")
 
 
 def empty_events_frame() -> pd.DataFrame:
@@ -241,12 +398,18 @@ def parse_evtx(
     evtx_path: str,
     progress_callback: ProgressCallback | None = None,
     stats: ParseStats | None = None,
+    event_ids: set[int] | None = None,
+    backend: str = "python",
 ) -> pd.DataFrame:
-    """Parse a Security.evtx file into a normalized DataFrame.
+    """Parse one .evtx file into a normalized DataFrame.
 
-    Records that fail to parse (malformed/truncated XML, which does happen
-    with corrupted or partially-overwritten log exports) are skipped rather
-    than aborting the whole run. Pass a ParseStats to find out how many.
+    Records that can't be read or parsed (corrupted/truncated exports, or a
+    log someone tampered with) are skipped rather than aborting the whole
+    run. Pass a ParseStats to find out how many.
+
+    event_ids, if given, limits full parsing to those Event IDs (typically
+    every ID some rule looks at): other records are recognized by a cheap
+    regex on their EventID and counted in stats.records_filtered.
 
     progress_callback, if given, is called with the running count of
     records processed every PROGRESS_INTERVAL records -- large Security.evtx
@@ -257,10 +420,30 @@ def parse_evtx(
     stats = stats if stats is not None else ParseStats()
     rows = []
     processed = 0
-    for xml_string in _iter_record_xml(evtx_path):
+    for item in _iter_record_xml(evtx_path, backend):
+        if isinstance(item, int):
+            processed += item
+            stats.records_skipped += item
+            continue
         processed += 1
+        # Track EventRecordIDs of every readable record -- including ones the
+        # prefilter drops below, which would otherwise look like gaps.
+        record_id = _RECORD_ID_RE.search(item)
+        if record_id:
+            channel, computer = _CHANNEL_RE.search(item), _COMPUTER_RE.search(item)
+            stats.note_record_id(
+                evtx_path,
+                channel.group(1) if channel else "",
+                computer.group(1) if computer else "",
+                int(record_id.group(1)),
+            )
+        if event_ids is not None:
+            match = _EVENT_ID_RE.search(item)
+            if match and int(match.group(1)) not in event_ids:
+                stats.records_filtered += 1
+                continue
         try:
-            rows.append(normalize_record(xml_string))
+            rows.append(normalize_record(item))
         except (ET.ParseError, ValueError):
             stats.records_skipped += 1
         if progress_callback and processed % PROGRESS_INTERVAL == 0:
@@ -275,4 +458,60 @@ def parse_evtx(
 
     df = pd.DataFrame(rows)
     df.sort_values("timestamp", inplace=True, ignore_index=True)
+    return df
+
+
+def find_evtx_files(inputs: list[str]) -> list[Path]:
+    """Expand a mix of files and directories (searched recursively for
+    *.evtx) into a de-duplicated, ordered list of files."""
+    found: list[Path] = []
+    for raw in inputs:
+        path = Path(raw)
+        if path.is_dir():
+            # casefolded sort: Path ordering is case-insensitive on Windows only,
+            # and the same inputs should come out in the same order everywhere
+            evtx = [p for p in path.rglob("*") if p.is_file() and p.suffix.lower() == ".evtx"]
+            found += sorted(evtx, key=lambda p: str(p).casefold())
+        elif path.is_file():
+            found.append(path)
+        else:
+            raise FileNotFoundError(f"input not found: {path}")
+    unique: dict[Path, Path] = {}
+    for p in found:
+        unique.setdefault(p.resolve(), p)
+    return list(unique.values())
+
+
+def parse_evtx_files(
+    paths: list[Path],
+    progress_callback: Callable[[Path, int], None] | None = None,
+    stats: ParseStats | None = None,
+    event_ids: set[int] | None = None,
+    backend: str = "python",
+) -> pd.DataFrame:
+    """Parse several .evtx files into one DataFrame with a `source_file`
+    column. Records present in more than one file (overlapping exports of
+    the same log) are kept once, keyed on channel + computer + EventRecordID."""
+    stats = stats if stats is not None else ParseStats()
+    frames = []
+    for path in paths:
+        callback = (lambda count, p=path: progress_callback(p, count)) if progress_callback else None
+        df = parse_evtx(str(path), progress_callback=callback, stats=stats, event_ids=event_ids, backend=backend)
+        stats.files += 1
+        if not df.empty:
+            df["source_file"] = str(path)
+            frames.append(df)
+
+    if not frames:
+        frame = empty_events_frame()
+        frame["source_file"] = pd.Series(dtype=object)
+        return frame
+
+    df = pd.concat(frames, ignore_index=True)
+    if len(paths) > 1:
+        keyed = df["record_id"].notna()
+        dupes = df[keyed].duplicated(subset=["channel", "target_host", "record_id"], keep="first")
+        stats.records_duplicate += int(dupes.sum())
+        df = df.drop(index=dupes[dupes].index)
+    df.sort_values("timestamp", kind="stable", inplace=True, ignore_index=True)
     return df
