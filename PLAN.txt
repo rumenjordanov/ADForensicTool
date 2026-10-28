@@ -36,22 +36,27 @@ STEP 4  Parse statistics   (done)
   [x] Count records read / skipped (malformed); show in CLI and on the
       Executive Summary (high skip counts = possible tampering).
 
-STEP 5  Rule engine hardening + generic conditions
-  [ ] Flagged events sorted by timestamp (found in step 4 E2E run: rows
+STEP 5  Rule engine hardening + generic conditions   (done)
+  [x] Flagged events sorted by timestamp (found in step 4 E2E run: rows
       came out grouped by rule, not chronological).
-  [ ] Validate rules: unknown keys, severity values, duplicate ids, required
-      fields -> clear error naming the rule.
-  [ ] `match:` (AND list) and `exclude:` conditions on any rule type, with
+  [x] Validate rules: unknown keys, severity values, duplicate ids, required
+      fields, bad regex, circular/unknown `after` refs -> RuleError naming
+      the rule. CLI now loads rules BEFORE parsing the log (fail fast) and
+      reports RuleError cleanly; warns on an empty rule set.
+  [x] `match:` (AND list) and `exclude:` conditions on any rule type, with
       equals / contains / startswith / endswith / regex, case-insensitive,
-      hex-normalized equals. Old `field`/`equals` form keeps working.
-  [ ] Kerberoasting: exclude krbtgt and machine ($) service names.
+      hex-normalized equals; {all: [...]} groups in exclude. Old
+      `field`/`equals` form keeps working.
+  [x] Kerberoasting: exclude krbtgt, machine ($) services and requesters,
+      and failed requests (Status != 0x0).
+  [x] Bug found while probing: events with no timestamp (NaT) were swept into
+      whatever threshold cluster was open. Fixed + regression test.
 
-STEP 6  New rule capabilities
-  [ ] threshold: `distinct_field` + `min_distinct` (password spraying: one
-      source IP failing against many different users).
-  [ ] New `followed_by` rule type: event that occurs within N minutes after
-      another rule fired for the same actor (logon after brute force,
-      persistence after suspicious logon).
+STEP 6  New rule capabilities   (done)
+  [x] threshold: `distinct_field` + `min_distinct`; group_by keys compare
+      account names case/domain-insensitively (jsmith == CONTOSO\JSmith).
+  [x] New `followed_by` rule type (after, within_minutes, join_on), rules
+      auto-ordered so dependencies run first.
 
 STEP 7  New detections (YAML)
   [ ] password spraying, successful logon after brute force, AS-REP

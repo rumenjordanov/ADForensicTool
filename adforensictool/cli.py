@@ -15,7 +15,7 @@ import yaml
 from adforensictool import console
 from adforensictool.excel_export.report import build_report
 from adforensictool.parser.evtx_parser import ParseStats, parse_evtx
-from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
+from adforensictool.rules.engine import DEFAULT_RULES_PATH, RuleError, apply_rules, load_rules
 from adforensictool.version import __version__
 
 
@@ -51,6 +51,22 @@ def _run(args: argparse.Namespace) -> int:
         console.error(f"rules file not found: {rules_path}")
         return 1
 
+    # Load rules before parsing: a typo in the rules file should fail in
+    # a second, not after minutes spent parsing a large log.
+    console.info(f"Loading rules from {rules_path} ...")
+    try:
+        rules = load_rules(rules_path)
+    except yaml.YAMLError as exc:
+        console.error(f"malformed rules file {rules_path}: {exc}")
+        return 1
+    except RuleError as exc:
+        console.error(f"invalid rules file {rules_path}: {exc}")
+        return 1
+    if rules:
+        console.success(f"Loaded {len(rules)} rule(s)")
+    else:
+        console.warn(f"{rules_path} contains no rules -- nothing will be flagged")
+
     console.info(f"Parsing {input_path} ...")
 
     def _report_progress(count: int) -> None:
@@ -65,14 +81,6 @@ def _run(args: argparse.Namespace) -> int:
             f"{stats.records_skipped} of {stats.records_read} record(s) could not be parsed and were skipped "
             "(corrupted export or possible tampering -- verify the source log)"
         )
-
-    console.info(f"Loading rules from {rules_path} ...")
-    try:
-        rules = load_rules(rules_path)
-    except yaml.YAMLError as exc:
-        console.error(f"malformed rules file {rules_path}: {exc}")
-        return 1
-    console.success(f"Loaded {len(rules)} rule(s)")
 
     console.info("Applying detection rules ...")
     flagged = apply_rules(df, rules)
