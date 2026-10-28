@@ -492,7 +492,7 @@ def _build_executive_summary(
             first_seen=("timestamp", "min"),
             last_seen=("timestamp", "max"),
         ).reset_index()
-        by_rule.sort_values("first_seen", inplace=True)
+        by_rule = by_rule.sort_values("first_seen")
         for _, row in by_rule.iterrows():
             severity = str(row["severity"]).lower()
             first, last = _fmt_time(row["first_seen"], tz), _fmt_time(row["last_seen"], tz)
@@ -641,7 +641,7 @@ def _build_detection_groups(ws: Worksheet, flagged: pd.DataFrame, tz: tzinfo | N
         first_seen=("timestamp", "min"),
         last_seen=("timestamp", "max"),
     ).reset_index()
-    grouped.sort_values("first_seen", inplace=True)
+    grouped = grouped.sort_values("first_seen")
     _write_table(ws, grouped, columns, tz)
 
 
