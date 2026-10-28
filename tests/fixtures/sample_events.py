@@ -181,6 +181,7 @@ def kerberoasting_xml(timestamp: str, user: str = "svc_sql", service: str = "MSS
             "TargetUserName": user,
             "ServiceName": service,
             "TicketEncryptionType": "0x17",
+            "Status": "0x0",
             "IpAddress": "10.0.0.5",
         },
     )

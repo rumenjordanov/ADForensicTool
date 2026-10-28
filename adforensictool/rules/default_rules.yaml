@@ -5,19 +5,38 @@
 #   name              human-readable name shown in reports
 #   severity          low | medium | high | critical
 #   mitre_technique   MITRE ATT&CK technique ID (informational, shown in coverage tab)
-#   type              one of: threshold, always_flag, field_match  (see rules/engine.py)
+#   type              threshold | always_flag | field_match | followed_by  (see rules/engine.py)
 #   event_ids         list of Windows Event IDs this rule looks at
+#   description       optional free text
 #
-# type: threshold  -- flags a cluster of N+ matching events for the same
+# Conditions (optional on every rule type):
+#   match:    list of conditions that must ALL hold
+#   exclude:  list of conditions; an event matching ANY entry is dropped.
+#             An entry can also be {all: [cond, cond]} to require several at once.
+#   A condition is {field: <name>, <op>: <value or list of values>} where op is
+#   one of equals | contains | startswith | endswith | regex. `field` names a
+#   normalized column (user, user_sid, subject_user, target_group, source_ip,
+#   target_host, logon_type, process_name) or else a raw EventData field.
+#   Comparisons are case-insensitive; `equals` treats "0x17" and "0x00000017"
+#   as the same number. A list of values means "any of these".
+#
+# type: threshold  -- flags a cluster of matching events for the same
 #   group_by column within window_minutes of each other.
-#   extra fields: group_by (normalized column name), window_minutes, min_count
+#   extra fields: group_by (normalized column), window_minutes, and
+#   min_count (N+ events) and/or distinct_field + min_distinct (N+ different
+#   values of that field, e.g. different usernames from one IP).
 #
 # type: always_flag -- flags every matching event unconditionally. Used for
 #   events that are inherently suspicious regardless of frequency.
 #
-# type: field_match -- flags events where a field in the raw event_data dict
-#   equals one of the given values.
-#   extra fields: field (raw EventData "Name" attribute), equals (list of strings)
+# type: field_match -- like always_flag, but requires conditions: either a
+#   `match:` list or the short form `field: X` + `equals: [values]`.
+#
+# type: followed_by -- flags a matching event that occurs within
+#   within_minutes AFTER an event flagged by one of the `after` rules, for
+#   the same actor. extra fields: after (rule id or list), within_minutes,
+#   join_on (column or list of columns compared between the two events,
+#   default: user).
 
 rules:
   - id: brute_force
@@ -59,8 +78,20 @@ rules:
     mitre_technique: T1558.003
     type: field_match
     event_ids: [4769]
-    field: TicketEncryptionType
-    equals: ["0x17"]
+    match:
+      - field: TicketEncryptionType
+        equals: ["0x17"]     # RC4-HMAC, crackable offline
+      - field: Status
+        equals: ["0x0"]      # ticket actually issued
+    exclude:
+      # RC4 tickets for krbtgt and for computer accounts are routine noise
+      # (legacy clients, trusts) and are not crackable service passwords.
+      - field: ServiceName
+        equals: [krbtgt]
+      - field: ServiceName
+        endswith: ["$"]
+      - field: TargetUserName  # machine accounts requesting tickets
+        regex: ['^[^@]*\$(@|$)']
 
   # The two rules below describe multi-event-ID sequences (a logon following
   # a brute-force cluster; a service/task created shortly after a suspicious

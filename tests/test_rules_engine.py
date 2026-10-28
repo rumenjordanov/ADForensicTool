@@ -133,7 +133,7 @@ def test_kerberoasting_matches_zero_padded_hex_from_real_evtx(rules):
         make_event_xml(
             4769,
             "2026-06-08T04:00:00.000000Z",
-            data={"TargetUserName": "svc_sql", "TicketEncryptionType": "0x00000017"},
+            data={"TargetUserName": "svc_sql", "TicketEncryptionType": "0x00000017", "Status": "0x00000000"},
         )
     ]
     df = _df_from_xml(xml)
