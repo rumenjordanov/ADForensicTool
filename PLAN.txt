@@ -22,19 +22,23 @@ STEP 2  Excel formula injection
       in every place report.py writes log-derived text.
   [ ] Regression test with a hostile username.
 
-STEP 3  Correct actor fields per event ID
-  [ ] Per-event-ID field mapping: `user` = account the event is about
+STEP 3  Correct actor fields per event ID   (done)
+  [x] Per-event-ID field mapping: `user` = account the event is about
       (4728/4732/4756 -> the MEMBER added, not the group), new columns
       `subject_user` (who performed it) and `target_group`.
-  [ ] Parse <UserData> as well as <EventData> (real 1102 events keep
+  [x] Parse <UserData> as well as <EventData> (real 1102 events keep
       SubjectUserName under UserData/LogFileCleared).
-  [ ] Tests.
+  [x] Also: `user_sid` column (MemberName is a CN/display name, so SIDs are
+      the reliable join key), "-" / NULL SID treated as absent, DN -> CN.
+  [x] Tests.
 
-STEP 4  Parse statistics
-  [ ] Count records read / skipped (malformed); show in CLI and on the
+STEP 4  Parse statistics   (done)
+  [x] Count records read / skipped (malformed); show in CLI and on the
       Executive Summary (high skip counts = possible tampering).
 
 STEP 5  Rule engine hardening + generic conditions
+  [ ] Flagged events sorted by timestamp (found in step 4 E2E run: rows
+      came out grouped by rule, not chronological).
   [ ] Validate rules: unknown keys, severity values, duplicate ids, required
       fields -> clear error naming the rule.
   [ ] `match:` (AND list) and `exclude:` conditions on any rule type, with

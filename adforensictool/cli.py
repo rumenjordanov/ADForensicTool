@@ -14,7 +14,7 @@ import yaml
 
 from adforensictool import console
 from adforensictool.excel_export.report import build_report
-from adforensictool.parser.evtx_parser import parse_evtx
+from adforensictool.parser.evtx_parser import ParseStats, parse_evtx
 from adforensictool.rules.engine import DEFAULT_RULES_PATH, apply_rules, load_rules
 from adforensictool.version import __version__
 
@@ -56,9 +56,15 @@ def _run(args: argparse.Namespace) -> int:
     def _report_progress(count: int) -> None:
         console.progress(f"Parsing {input_path} ... {count} record(s) processed")
 
-    df = parse_evtx(str(input_path), progress_callback=_report_progress)
+    stats = ParseStats()
+    df = parse_evtx(str(input_path), progress_callback=_report_progress, stats=stats)
     console.progress_done()
     console.success(f"Parsed {len(df)} event(s)")
+    if stats.records_skipped:
+        console.warn(
+            f"{stats.records_skipped} of {stats.records_read} record(s) could not be parsed and were skipped "
+            "(corrupted export or possible tampering -- verify the source log)"
+        )
 
     console.info(f"Loading rules from {rules_path} ...")
     try:
@@ -73,7 +79,7 @@ def _run(args: argparse.Namespace) -> int:
     console.success(f"{len(flagged)} event(s) flagged")
 
     console.info(f"Writing report to {args.output} ...")
-    build_report(df, flagged, rules, args.output, source_file=str(input_path))
+    build_report(df, flagged, rules, args.output, source_file=str(input_path), parse_stats=stats)
     console.success(f"Report written to {args.output}")
     return 0
 

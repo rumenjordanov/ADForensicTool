@@ -23,6 +23,7 @@ from tests.fixtures.sample_events import (
     failed_logon_xml,
     group_membership_change_xml,
     kerberoasting_xml,
+    make_event_xml,
     successful_logon_xml,
 )
 
@@ -36,7 +37,9 @@ def test_normalize_failed_logon():
     assert record["source_ip"] == "203.0.113.44"
     assert record["target_host"] == "DC01.contoso.local"
     assert record["logon_type"] == "3"
-    assert record["process_name"] == "-"
+    # "-" is Windows' placeholder for "no value", not a real process name
+    assert record["process_name"] is None
+    assert record["subject_user"] is None  # SubjectUserName "-" on a 4625
     assert "TargetUserName=jsmith" in record["raw_message"]
     assert record["event_data"]["Status"] == "0xc000006d"
     assert record["timestamp"] == pd.Timestamp("2026-06-08T02:14:00.000000Z")
@@ -57,12 +60,42 @@ def test_normalize_group_membership_change_exposes_extra_fields():
     record = normalize_record(xml)
 
     assert record["event_id"] == 4728
-    # TargetUserName on 4728 is the group name, not a logon target -- still
-    # lands in `user` via the generic alias map. Group/member detail lives
-    # in event_data for rule-specific logic to pick up.
-    assert record["user"] == "Domain Admins"
-    assert record["event_data"]["SubjectUserName"] == "administrator"
-    assert "jsmith" in record["event_data"]["MemberName"]
+    # Regression test: TargetUserName on 4728 is the GROUP, not a user. The
+    # generic "TargetUserName first" alias used to put "Domain Admins" in
+    # `user`, which made the account that was actually escalated invisible
+    # (and impossible to correlate with e.g. a brute force against it).
+    assert record["user"] == "jsmith"
+    assert record["user_sid"] == "S-1-5-21-1-2-3-1234"
+    assert record["target_group"] == "Domain Admins"
+    assert record["subject_user"] == "administrator"
+
+
+@pytest.mark.parametrize("event_id", [4728, 4732, 4756])
+def test_member_name_dn_with_escaped_comma(event_id):
+    xml = make_event_xml(
+        event_id,
+        "2026-06-08T02:53:00.000000Z",
+        data={
+            "MemberName": r"CN=Smith\, John,OU=Staff,DC=contoso,DC=local",
+            "MemberSid": "S-1-5-21-1-2-3-1500",
+            "TargetUserName": "Administrators",
+            "SubjectUserName": "administrator",
+        },
+    )
+    record = normalize_record(xml)
+    assert record["user"] == "Smith, John"
+    assert record["target_group"] == "Administrators"
+
+
+def test_member_name_placeholder_falls_back_to_none_user_but_keeps_sid():
+    xml = make_event_xml(
+        4732,
+        "2026-06-08T02:53:00.000000Z",
+        data={"MemberName": "-", "MemberSid": "S-1-5-21-1-2-3-1501", "TargetUserName": "Administrators"},
+    )
+    record = normalize_record(xml)
+    assert record["user"] is None
+    assert record["user_sid"] == "S-1-5-21-1-2-3-1501"
 
 
 def test_normalize_audit_log_cleared_has_minimal_fields():
@@ -72,7 +105,12 @@ def test_normalize_audit_log_cleared_has_minimal_fields():
     assert record["event_id"] == 1102
     assert record["source_ip"] is None
     assert record["logon_type"] is None
+    # Regression test: real 1102s carry their fields under
+    # <UserData><LogFileCleared>, not <EventData>; reading only EventData
+    # meant who cleared the log was silently lost.
     assert record["event_data"]["SubjectUserName"] == "administrator"
+    assert record["user"] == "administrator"
+    assert record["subject_user"] == "administrator"
 
 
 def test_normalize_kerberoasting_ticket_encryption_type():
@@ -96,9 +134,12 @@ def test_parse_evtx_sorts_by_timestamp_and_skips_bad_records(monkeypatch):
     ]
     monkeypatch.setattr(evtx_parser, "_iter_record_xml", lambda path: iter(xml_records))
 
-    df = evtx_parser.parse_evtx("unused-path.evtx")
+    stats = evtx_parser.ParseStats()
+    df = evtx_parser.parse_evtx("unused-path.evtx", stats=stats)
 
     assert len(df) == 2
+    assert stats.records_read == 3
+    assert stats.records_skipped == 1
     assert list(df["timestamp"]) == sorted(df["timestamp"])
     assert df.iloc[0]["timestamp"] < df.iloc[1]["timestamp"]
 

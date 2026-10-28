@@ -35,6 +35,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from adforensictool.excel_export import theme
+from adforensictool.parser.evtx_parser import ParseStats
 from adforensictool.rules.engine import Rule
 
 SEVERITY_SCORE = {"critical": 40, "high": 20, "medium": 10, "low": 5}
@@ -58,6 +59,9 @@ DISPLAY_COLUMNS = [
     "severity",
     "mitre_technique",
     "user",
+    "user_sid",
+    "subject_user",
+    "target_group",
     "source_ip",
     "target_host",
     "logon_type",
@@ -346,7 +350,14 @@ def _write_wide_row(ws: Worksheet, row: int, text: str, font: Font | None = None
     ws.row_dimensions[row].height = 18
 
 
-def _build_executive_summary(ws: Worksheet, df: pd.DataFrame, flagged: pd.DataFrame, source_file: str | None, generated_at: datetime) -> None:
+def _build_executive_summary(
+    ws: Worksheet,
+    df: pd.DataFrame,
+    flagged: pd.DataFrame,
+    source_file: str | None,
+    generated_at: datetime,
+    parse_stats: ParseStats | None = None,
+) -> None:
     for col in range(1, DASHBOARD_LAST_COL + 1):
         ws.column_dimensions[get_column_letter(col)].width = 11
 
@@ -383,6 +394,20 @@ def _build_executive_summary(ws: Worksheet, df: pd.DataFrame, flagged: pd.DataFr
             font = Font(color=theme.SEVERITY_TEXT_COLORS.get(severity, theme.BRAND_DARK), bold=True)
             _write_wide_row(ws, r, bullet, font)
             r += 1
+
+    if parse_stats is not None and parse_stats.records_skipped:
+        r += 1
+        _write_wide_row(
+            ws,
+            r,
+            (
+                f"  ▲  {parse_stats.records_skipped} of {parse_stats.records_read} log record(s) could not be "
+                "parsed and were skipped. A corrupted export can cause this, but so can tampering: "
+                "verify the source log's integrity."
+            ),
+            Font(color=theme.SEVERITY_TEXT_COLORS["high"], bold=True),
+        )
+        r += 1
 
     r += 1
     _write_wide_row(
@@ -441,7 +466,7 @@ def _build_attack_chains(ws: Worksheet, flagged: pd.DataFrame) -> None:
 
 
 def _build_account_changes(ws: Worksheet, flagged: pd.DataFrame) -> None:
-    columns = ["timestamp", "target_host", "event_id", "user", "raw_message", "severity"]
+    columns = ["timestamp", "target_host", "event_id", "user", "target_group", "subject_user", "severity", "raw_message"]
     changes = flagged[flagged["rule_id"] == "privilege_escalation"] if not flagged.empty else flagged
     if changes.empty:
         _write_header(ws, columns)
@@ -501,6 +526,7 @@ def build_report(
     output_path: str,
     source_file: str | None = None,
     generated_at: datetime | None = None,
+    parse_stats: ParseStats | None = None,
 ) -> None:
     """Build the .xlsx report and write it to output_path.
 
@@ -513,6 +539,8 @@ def build_report(
                    for provenance. Optional -- falls back to "unknown".
     generated_at:  report generation timestamp shown in the banner. Defaults
                    to now (UTC) if not supplied.
+    parse_stats:   record read/skip counters from parse_evtx; a non-zero skip
+                   count is called out on the Executive Summary.
 
     TODO: once correlator/chain_builder.py exists, pass its Chain objects in
     here (a `chains` parameter) and have _build_attack_chains render those
@@ -523,7 +551,7 @@ def build_report(
 
     ws_summary = wb.active
     ws_summary.title = "Executive Summary"
-    _build_executive_summary(ws_summary, df, flagged, source_file, generated_at)
+    _build_executive_summary(ws_summary, df, flagged, source_file, generated_at, parse_stats)
 
     ws_chains = wb.create_sheet("Attack Chains")
     _build_attack_chains(ws_chains, flagged)

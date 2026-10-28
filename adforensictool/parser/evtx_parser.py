@@ -12,8 +12,10 @@ log entries, without needing a real .evtx fixture.
 """
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -32,15 +34,46 @@ _NS = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
 # use "SourceAddress").
 _FIELD_ALIASES: dict[str, list[str]] = {
     "user": ["TargetUserName", "SubjectUserName"],
-    "source_ip": ["IpAddress", "SourceAddress"],
+    "user_sid": ["TargetUserSid", "TargetSid", "SubjectUserSid"],
+    "subject_user": ["SubjectUserName"],
+    "target_group": [],
+    "source_ip": ["IpAddress", "SourceAddress", "ClientAddress"],
     "logon_type": ["LogonType"],
     "process_name": ["ProcessName", "NewProcessName"],
+}
+
+# Per-Event-ID overrides of _FIELD_ALIASES, for events where the generic
+# "TargetUserName first" guess points at the wrong thing. `user` is always
+# meant to be *the account the event is about* -- the one an analyst would
+# follow from event to event -- and `subject_user` the account that
+# performed the action.
+_MEMBER_CHANGE = {
+    # TargetUserName on these is the GROUP ("Domain Admins"), not a user.
+    # The account that was added/removed is MemberName (a DN) / MemberSid.
+    "user": ["MemberName"],
+    "user_sid": ["MemberSid"],
+    "target_group": ["TargetUserName"],
+}
+_PERFORMED_BY_SUBJECT = {
+    # No meaningful target account: the interesting account is whoever did it.
+    "user": ["SubjectUserName"],
+    "user_sid": ["SubjectUserSid"],
+}
+_EVENT_FIELD_OVERRIDES: dict[int, dict[str, list[str]]] = {
+    **{eid: _MEMBER_CHANGE for eid in (4728, 4729, 4732, 4733, 4756, 4757)},
+    # 1102 log cleared, 4662 directory object access (DCSync), 4697 service
+    # installed, 4698 scheduled task created, 4719 audit policy changed,
+    # 4794 DSRM password set
+    **{eid: _PERFORMED_BY_SUBJECT for eid in (1102, 4662, 4697, 4698, 4719, 4794)},
 }
 
 REQUIRED_COLUMNS = [
     "timestamp",
     "event_id",
     "user",
+    "user_sid",
+    "subject_user",
+    "target_group",
     "source_ip",
     "target_host",
     "logon_type",
@@ -48,15 +81,69 @@ REQUIRED_COLUMNS = [
     "raw_message",
 ]
 
+# Placeholder values Windows writes into empty fields. Treated as "absent"
+# so e.g. a 4625's SubjectUserName "-" never becomes someone's identity
+# (S-1-0-0 is the NULL SID, used the same way for SID fields).
+_EMPTY_VALUES = {"", "-", "S-1-0-0"}
+
+_DN_CN_RE = re.compile(r"^CN=((?:\\.|[^,])+)", re.IGNORECASE)
+
+
+@dataclass
+class ParseStats:
+    """Counters filled in by parse_evtx, for the CLI and the report.
+
+    A large records_skipped count is worth an analyst's attention by itself:
+    it can mean a corrupted export, or a log someone tampered with.
+    """
+
+    records_read: int = 0
+    records_skipped: int = 0
+
+
+def _account_from_dn(value: str) -> str:
+    """'CN=Smith\\, John,CN=Users,DC=contoso,DC=local' -> 'Smith, John'."""
+    match = _DN_CN_RE.match(value)
+    if not match:
+        return value
+    return re.sub(r"\\(.)", r"\1", match.group(1))
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _extract_fields(root: ET.Element) -> dict[str, str]:
+    """Collect every named data field on the record.
+
+    Most Security events carry their fields as <EventData><Data Name="...">,
+    but some (notably 1102 audit log cleared) use <UserData><SomeElement>
+    with child elements instead -- e.g. UserData/LogFileCleared/SubjectUserName.
+    Both end up in one flat dict.
+    """
+    fields: dict[str, str] = {}
+    event_data_el = root.find("e:EventData", _NS)
+    if event_data_el is not None:
+        for data_el in event_data_el.findall("e:Data", _NS):
+            name = data_el.get("Name")
+            if name:
+                fields[name] = data_el.text or ""
+
+    user_data_el = root.find("e:UserData", _NS)
+    if user_data_el is not None:
+        for container in user_data_el:
+            for child in container:
+                fields.setdefault(_local_name(child.tag), child.text or "")
+    return fields
+
 
 def normalize_record(xml_string: str) -> dict[str, Any]:
     """Convert one Security event's XML rendering into a normalized dict.
 
-    Returns a dict with the 8 REQUIRED_COLUMNS plus an `event_data` dict
-    holding every raw <Data Name="..."> field from the record, so
-    rule-specific logic (e.g. kerberoasting's TicketEncryptionType, or
-    privilege-escalation's MemberName/TargetUserName-as-group) can reach
-    fields that don't have a place in the common schema.
+    Returns a dict with the REQUIRED_COLUMNS plus an `event_data` dict
+    holding every raw data field from the record, so rule-specific logic
+    (e.g. kerberoasting's TicketEncryptionType) can reach fields that don't
+    have a place in the common schema.
     """
     root = ET.fromstring(xml_string)
 
@@ -73,32 +160,34 @@ def normalize_record(xml_string: str) -> dict[str, Any]:
     computer_el = system.find("e:Computer", _NS)
     target_host = computer_el.text if computer_el is not None else None
 
-    event_data: dict[str, str] = {}
-    event_data_el = root.find("e:EventData", _NS)
-    if event_data_el is not None:
-        for data_el in event_data_el.findall("e:Data", _NS):
-            name = data_el.get("Name")
-            if name:
-                event_data[name] = data_el.text or ""
+    event_data = _extract_fields(root)
+    aliases = {**_FIELD_ALIASES, **_EVENT_FIELD_OVERRIDES.get(event_id, {})}
 
-    def first_present(candidates: list[str]) -> str | None:
-        for name in candidates:
-            if name in event_data and event_data[name]:
-                return event_data[name]
+    def first_present(column: str) -> str | None:
+        for name in aliases[column]:
+            value = event_data.get(name)
+            if value is not None and value.strip() not in _EMPTY_VALUES:
+                return value
         return None
 
-    record = {
+    user = first_present("user")
+    if user and user.upper().startswith("CN="):
+        user = _account_from_dn(user)
+
+    return {
         "timestamp": pd.to_datetime(timestamp, utc=True) if timestamp else pd.NaT,
         "event_id": event_id,
-        "user": first_present(_FIELD_ALIASES["user"]),
-        "source_ip": first_present(_FIELD_ALIASES["source_ip"]),
+        "user": user,
+        "user_sid": first_present("user_sid"),
+        "subject_user": first_present("subject_user"),
+        "target_group": first_present("target_group"),
+        "source_ip": first_present("source_ip"),
         "target_host": target_host,
-        "logon_type": first_present(_FIELD_ALIASES["logon_type"]),
-        "process_name": first_present(_FIELD_ALIASES["process_name"]),
+        "logon_type": first_present("logon_type"),
+        "process_name": first_present("process_name"),
         "raw_message": "; ".join(f"{k}={v}" for k, v in event_data.items()),
         "event_data": event_data,
     }
-    return record
 
 
 def _iter_record_xml(evtx_path: str) -> Iterator[str]:
@@ -114,13 +203,20 @@ def _iter_record_xml(evtx_path: str) -> Iterator[str]:
             yield record.xml()
 
 
-def parse_evtx(evtx_path: str, progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
+def empty_events_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=REQUIRED_COLUMNS + ["event_data"])
+
+
+def parse_evtx(
+    evtx_path: str,
+    progress_callback: ProgressCallback | None = None,
+    stats: ParseStats | None = None,
+) -> pd.DataFrame:
     """Parse a Security.evtx file into a normalized DataFrame.
 
     Records that fail to parse (malformed/truncated XML, which does happen
     with corrupted or partially-overwritten log exports) are skipped rather
-    than aborting the whole run; skipped-record count is worth logging by
-    the caller if it becomes large.
+    than aborting the whole run. Pass a ParseStats to find out how many.
 
     progress_callback, if given, is called with the running count of
     records processed every PROGRESS_INTERVAL records -- large Security.evtx
@@ -128,6 +224,7 @@ def parse_evtx(evtx_path: str, progress_callback: ProgressCallback | None = None
     and a CLI sitting silent for a minute-plus reads as hung rather than
     working.
     """
+    stats = stats if stats is not None else ParseStats()
     rows = []
     processed = 0
     for xml_string in _iter_record_xml(evtx_path):
@@ -135,15 +232,16 @@ def parse_evtx(evtx_path: str, progress_callback: ProgressCallback | None = None
         try:
             rows.append(normalize_record(xml_string))
         except (ET.ParseError, ValueError):
-            pass
+            stats.records_skipped += 1
         if progress_callback and processed % PROGRESS_INTERVAL == 0:
             progress_callback(processed)
+    stats.records_read += processed
 
     if progress_callback:
         progress_callback(processed)
 
     if not rows:
-        return pd.DataFrame(columns=REQUIRED_COLUMNS + ["event_data"])
+        return empty_events_frame()
 
     df = pd.DataFrame(rows)
     df.sort_values("timestamp", inplace=True, ignore_index=True)
